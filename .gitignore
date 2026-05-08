@@ -10,3 +10,8 @@ prof/
 docs/jupyter_execute/
 uv.lock
 __marimo__
+
+# Football MCP — data files (too large for git; host on HuggingFace/Kaggle)
+data/raw/
+data/unified_player_stats.csv
+data/manifest.json
