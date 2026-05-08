@@ -1,40 +1,141 @@
-<p align="center">
-  <img src="https://github.com/oseymour/ScraperFC/blob/main/docs/source/images/ScraperFC-Logo-Final-2023-10-11 copy-Full-Color.svg?raw=true" alt="ScraperFC logo. The text 'ScraperFC' with some lines, X's, and O's around it. Meant to look similar to a tactics board or diagram."></img>
-</p>
-<p align="center">
-  <a href="https://pypi.org/project/ScraperFC/">
-    <img src="https://img.shields.io/pypi/v/scraperfc.svg", alt="pypi version badge"></img>
-  </a>
-  <a href="https://scraperfc.readthedocs.io/en/latest/">
-    <img src="https://readthedocs.org/projects/nrc4d/badge/?version=latest" alt="documentation status badge"/></img>
-  </a>
-  <a href="https://pypi.org/project/ScraperFC/">
-    <img src="https://img.shields.io/pypi/dm/ScraperFC.svg" alt="monthly pypi downloads badge"/></img>
-  </a>
-</p>
-<p align="center">
-  <a href=https://discord.com/invite/C5N8dqCJAq>
-    <img src="https://dcbadge.limes.pink/api/server/C5N8dqCJAq" alt="Discord invite link badge"></img>
-  </a>
-  <a href="https://buymeacoffee.com/oseymour">
-    <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee badge"></img>
-  </a>
-</p>
+# football-data-mcp
 
-This is ScraperFC, a Python package that I hope will give more people access to soccer data. Gone are the days of downloading spreadsheets one-by-one, copy-pasting, or entering data by hand. I try to make ScraperFC as easy-to-use as possible so that anybody with a bit of Python experience can use it.
+A multi-source football data pipeline and MCP server that lets Claude (and any MCP-compatible AI assistant) answer real football analytics questions — player scouting, similarity search, market value filtering, xG tables, match shot maps, and more.
 
-To install ScraperFC, run ```pip install ScraperFC``` from the command line.
+Built on top of [ScraperFC](https://github.com/oseymour/ScraperFC) by Owen Seymour.
 
-Data can be scraped from the following sources:
-* [Capology](https://www.capology.com/)
-* [ClubELO](http://clubelo.com/)
-* [FBref](https://fbref.com/en/)
-* [Sofascore](https://www.sofascore.com/)
-* [Transfermarkt](https://www.transfermarkt.us/)
-* [Understat](https://understat.com/)
+---
 
-For documentation, head over to the [Read the Docs page](https://scraperfc.readthedocs.io).
+## What it does
 
-Join our [Discord](https://discord.gg/C5N8dqCJAq)!
+Pulls data from four sources, merges them into a single unified dataset, and serves it through a Model Context Protocol (MCP) server:
 
-I'd love to hear your feedback, bugs you find, or new features you want! The best way is to open an issue on this repository and I can respond to it there. Otherwise, you can reach me via email at osmour043@gmail.com.
+| Source | What it contributes |
+|--------|-------------------|
+| **SofaScore** | 80+ match stats per player: rating, progressive carries, big chances, dribbles, aerials, accurate long balls, etc. |
+| **FBref** | xG, npxG, xA, progressive passes received, GCA, SCA, pass completion % |
+| **Understat** | xg_chain, xg_buildup (involvement in build-up play) |
+| **Transfermarkt** | Market value, contract expiration, height, nationality, position |
+
+**Coverage:** 10 leagues · 3 seasons (2023-24, 2024-25, 2025-26) · 18,800+ player records · 146 columns
+
+---
+
+## The 8 MCP tools
+
+Once connected, Claude can use these tools directly in conversation:
+
+| Tool | What you can ask |
+|------|-----------------|
+| `get_player` | "Show me everything on Bukayo Saka" |
+| `scout_position` | "Top 10 pressing forwards in the Bundesliga this season" |
+| `compare_players` | "Compare Salah and Son across all stats" |
+| `find_similar_players` | "Find players similar to Bellingham under €80m" |
+| `get_league_table` | "xG league table for Serie A, home games only" |
+| `get_match` | "Shot map from the El Clasico in March" |
+| `get_player_history` | "Haaland's xG per game across the season" |
+| `data_status` | Coverage check across all data sources |
+
+---
+
+## Setup
+
+### 1. Install dependencies
+
+```bash
+pip install -e .
+pip install rapidfuzz
+```
+
+### 2. Collect the data
+
+```bash
+# Full collection (takes a while — runs headless Chrome for FBref + SofaScore)
+python3 collect_data.py
+
+# Individual sources
+python3 collect_data.py --sofascore-only
+python3 collect_data.py --understat-only
+python3 collect_data.py --transfermarkt-only
+
+# Supplementary data (xG tables, match shots, rosters)
+python3 collect_data.py --understat-tables-only
+python3 collect_data.py --understat-matches-only
+
+# Rebuild the unified CSV from already-collected raw files
+python3 collect_data.py --rebuild-only
+```
+
+### 3. Connect to Claude Desktop
+
+Add this to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "soccer-data": {
+      "command": "python3",
+      "args": ["/path/to/football-data-mcp/soccer_server.py"]
+    }
+  }
+}
+```
+
+On macOS the config file lives at:
+`~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Restart Claude Desktop. The 8 tools will appear automatically.
+
+---
+
+## Data files
+
+Raw files are stored in `data/raw/` and the merged dataset at `data/unified_player_stats.csv`.
+
+---
+
+## Leagues covered
+
+| League | Seasons |
+|--------|---------|
+| England Premier League | 2023-24, 2024-25, 2025-26 |
+| England EFL Championship | 2023-24, 2024-25, 2025-26 |
+| Spain La Liga | 2023-24, 2024-25, 2025-26 |
+| Germany Bundesliga | 2023-24, 2024-25, 2025-26 |
+| Italy Serie A | 2023-24, 2024-25, 2025-26 |
+| France Ligue 1 | 2023-24, 2024-25, 2025-26 |
+| Netherlands Eredivisie | 2023-24, 2024-25, 2025-26 |
+| Portugal Primeira Liga | 2023-24, 2024-25, 2025-26 |
+| UEFA Champions League | 2023-24, 2024-25, 2025-26 |
+| UEFA Europa League | 2023-24, 2024-25, 2025-26 |
+
+Transfermarkt financial data (market value, contract, nationality) covers the 8 domestic leagues for 2024-25 at 99.6% match rate.
+
+---
+
+## Project structure
+
+```
+football-data-mcp/
+├── collect_data.py          # Full data pipeline (scrape → merge → save)
+├── soccer_server.py         # MCP server (8 tools)
+├── src/ScraperFC/           # ScraperFC scrapers (upstream: oseymour/ScraperFC)
+└── data/
+    ├── unified_player_stats.csv   # Main merged dataset (gitignored)
+    └── raw/                       # Per-source parquet files (gitignored)
+```
+
+---
+
+## Contributing
+
+This project builds on [ScraperFC](https://github.com/oseymour/ScraperFC). Bug fixes to the underlying scrapers are contributed back upstream — if you find something broken in a scraper, consider opening an issue or PR there too.
+
+For issues specific to the pipeline (`collect_data.py`) or the MCP server (`soccer_server.py`), open an issue here.
+
+---
+
+## Credits
+
+- [ScraperFC](https://github.com/oseymour/ScraperFC) by Owen Seymour — the foundation this project builds on
+- Data sources: [FBref](https://fbref.com), [SofaScore](https://sofascore.com), [Understat](https://understat.com), [Transfermarkt](https://transfermarkt.us)
