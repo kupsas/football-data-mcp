@@ -11,7 +11,34 @@ docs/jupyter_execute/
 uv.lock
 __marimo__
 
-# Football MCP — data files (too large for git; host on HuggingFace/Kaggle)
-data/raw/
-data/unified_player_stats.csv
-data/manifest.json
+# Football MCP — data folder (generated locally or served from R2; never commit)
+data/
+
+#Ignore environment files
+.env
+
+#Ignore .DS_Store files
+.DS_Store
+
+# Coding agent / local IDE noise (keep repo portable)
+.cursor/
+.claude/
+.cursorrules
+
+# Scraper and app logs (regenerated; can contain paths or timestamps you do not want in git)
+*.log
+
+# Python virtual environments (machine-specific; never commit)
+.venv/
+venv/
+ENV/
+
+# Test and type/lint tool caches (recreated on demand)
+.pytest_cache/
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging build outputs (in addition to ScraperFC.egg-info above)
+dist/
+.eggs/
