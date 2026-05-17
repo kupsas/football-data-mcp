@@ -45,6 +45,8 @@ dependencies = [
 test = [
     "pytest>=8.3.4",
     "pytest-cov>=6.0.0",
+    # SofaScore Bright Data path imports this; tests mock the client but need the package importable.
+    "brightdata-sdk>=2.0.0",
 ]
 docs = [
     "furo>=2024.8.6",

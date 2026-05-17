@@ -1,3 +1,6 @@
 [pytest]
 addopts = ["-s", "-v", "--cov=ScraperFC"]
 norecursedirs = ["docs", "*.egg-info", ".git", ".tox"]
+markers = [
+    "integration: live network / headless Chrome (skip in CI with -m 'not integration')",
+]
