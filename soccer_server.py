@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Soccer MCP Server — 7+1 tools covering all collected data.
+Soccer MCP Server — tools covering collected data + SofaScore match-level + ClubElo.
 
 Tools
 -----
-1. get_player          — find a player, return full stats + financial data
-2. scout_position      — top players for a position (absorbs get_league_leaders via sort_by)
-3. compare_players     — side-by-side stat + financial comparison
-4. find_similar_players — cosine-similarity matching with optional budget cap
-5. get_league_table    — Understat xG league table (overall / home / away)
-6. get_match           — per-match shot data and player rosters
-7. get_player_history  — form (per-match), market value history, or transfers
-8. data_status         — coverage check (utility)
+1. get_player              — find a player, return full stats + optional ClubElo team context
+2. scout_position          — top players for a position
+3. compare_players         — side-by-side stat comparison
+4. find_similar_players    — cosine-similarity matching
+5. get_league_table        — Understat xG league table
+6. get_match               — Understat match_id: shots + rosters
+7. get_sofascore_match     — SofaScore match_id: shots, team stats, player stats, momentum
+8. get_club_elo            — Club strength (Elo) + upcoming fixtures with win probabilities
+9. get_player_history      — form / value / transfers
+10. data_status            — coverage + raw file counts + freshness
 """
 
 import json
 import sys
 import logging
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,8 @@ log = logging.getLogger(__name__)
 DATA_DIR    = Path(__file__).parent / "data"
 RAW_DIR     = DATA_DIR / "raw"
 UNIFIED_CSV = DATA_DIR / "unified_player_stats.csv"
+FRESHNESS_PATH = RAW_DIR / ".freshness.json"
+MANIFEST_PATH = DATA_DIR / "manifest.json"
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -142,6 +147,148 @@ def _load_parquets(pattern: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def _freshness_summary() -> dict:
+    """Summarise data/raw/.freshness.json for MCP data_status."""
+    out: dict = {"freshness_entries": 0}
+    if not FRESHNESS_PATH.exists():
+        return out
+    try:
+        data = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+        out["freshness_entries"] = len(data)
+        times = []
+        for meta in data.values():
+            ts = meta.get("fetched_at")
+            if not ts:
+                continue
+            try:
+                times.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+            except ValueError:
+                continue
+        if times:
+            oldest = min(times)
+            newest = max(times)
+            out["oldest_raw_fetch_utc"] = oldest.isoformat()
+            out["newest_raw_fetch_utc"] = newest.isoformat()
+            age_days = (datetime.now(timezone.utc) - newest).total_seconds() / 86400
+            out["newest_raw_fetch_age_days"] = round(age_days, 2)
+    except Exception as e:
+        out["freshness_error"] = str(e)
+    return out
+
+
+def _manifest_summary() -> dict:
+    """Read data/manifest.json for build timestamps (written by collect_data._finalize_and_save)."""
+    if not MANIFEST_PATH.exists():
+        return {}
+    try:
+        m = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        return {
+            k: m[k]
+            for k in ("last_built_at", "oldest_source_fetched_at")
+            if k in m and m[k] is not None
+        }
+    except Exception as e:
+        return {"manifest_error": str(e)}
+
+
+def _latest_clubelo_global_df() -> pd.DataFrame:
+    paths = sorted(RAW_DIR.glob("clubelo__global__*.parquet"))
+    if not paths:
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(paths[-1])
+    except Exception:
+        return pd.DataFrame()
+
+
+def _clubelo_team_context(team_name: str | None) -> dict | None:
+    """Match a club name from unified CSV to ClubElo global snapshot (latest file)."""
+    if not team_name or not isinstance(team_name, str):
+        return None
+    df = _latest_clubelo_global_df()
+    if df.empty or "club" not in df.columns:
+        return None
+    clubs = df["club"].astype(str).tolist()
+    try:
+        from rapidfuzz import process, fuzz
+
+        hit = process.extractOne(
+            team_name,
+            clubs,
+            scorer=fuzz.WRatio,
+            score_cutoff=78,
+        )
+        if hit is None:
+            return None
+        club_name, score, _ = hit
+        row = df.loc[df["club"].astype(str) == club_name].iloc[0]
+        return {
+            "clubelo_club":       str(row["club"]),
+            "clubelo_rank":       int(row["rank"]) if pd.notna(row.get("rank")) else None,
+            "clubelo_elo":        float(row["elo"]) if pd.notna(row.get("elo")) else None,
+            "clubelo_country":    str(row.get("country", "")),
+            "clubelo_match_score": int(score),
+        }
+    except ImportError:
+        tlow = team_name.lower()
+        for _, row in df.iterrows():
+            c = str(row["club"]).lower()
+            if c in tlow or tlow in c:
+                return {
+                    "clubelo_club": str(row["club"]),
+                    "clubelo_rank": int(row["rank"]) if pd.notna(row.get("rank")) else None,
+                    "clubelo_elo": float(row["elo"]) if pd.notna(row.get("elo")) else None,
+                    "clubelo_country": str(row.get("country", "")),
+                    "clubelo_match_score": None,
+                }
+        return None
+
+
+def _resolve_sofascore_match_id(
+    home: str,
+    away: str,
+    league: str | None = None,
+    season: str | None = None,
+) -> int | None:
+    """Find SofaScore match_id from team names using sofascore_match_team_stats parquets."""
+    dfp = _load_parquets("sofascore_match_team_stats__*.parquet")
+    if dfp.empty or "match_id" not in dfp.columns:
+        return None
+    sub = dfp
+    if "period" in sub.columns:
+        sub = sub[sub["period"].astype(str).str.upper() == "ALL"]
+    if league and "league" in sub.columns:
+        sub = sub[sub["league"].astype(str).str.contains(league, case=False, na=False)]
+    if season and "season" in sub.columns:
+        sub = sub[sub["season"].astype(str) == str(season)]
+    if sub.empty:
+        return None
+    try:
+        from rapidfuzz import fuzz
+
+        best_mid: int | None = None
+        best = -1.0
+        for mid in sub["match_id"].dropna().unique():
+            chunk = sub[sub["match_id"] == mid].head(1)
+            if chunk.empty:
+                continue
+            r = chunk.iloc[0]
+            h, a = str(r.get("home_team", "")), str(r.get("away_team", ""))
+            s = fuzz.WRatio(home.lower(), h.lower()) + fuzz.WRatio(away.lower(), a.lower())
+            if s > best:
+                best = s
+                best_mid = int(mid)
+        return best_mid if best >= 160 else None
+    except ImportError:
+        for mid in sub["match_id"].dropna().unique():
+            chunk = sub[sub["match_id"] == mid].head(1)
+            r = chunk.iloc[0]
+            h, a = str(r.get("home_team", "")).lower(), str(r.get("away_team", "")).lower()
+            if home.lower() in h and away.lower() in a:
+                return int(mid)
+        return None
+
+
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 def tool_get_player(args: dict) -> dict:
@@ -168,15 +315,27 @@ def tool_get_player(args: dict) -> dict:
     ] if c in results.columns]
 
     if len(results) > 5 and not full_stats:
+        rows_out = []
+        for _, row in results[summary_cols].head(10).iterrows():
+            d = _row_to_dict(row)
+            ce = _clubelo_team_context(str(row["team"]) if "team" in row.index else None)
+            if ce:
+                d.update(ce)
+            rows_out.append(d)
         return {
             "count": len(results),
             "note": "Multiple results. Narrow with season/league/team or set full_stats=true.",
-            "players": [_row_to_dict(r) for _, r in results[summary_cols].head(10).iterrows()],
+            "players": rows_out,
         }
 
     players = []
     for _, row in results.head(5).iterrows():
-        players.append(_row_to_dict(row) if full_stats else _row_to_dict(row[summary_cols]))
+        d = _row_to_dict(row) if full_stats else _row_to_dict(row[summary_cols])
+        team_nm = row.get("team") if "team" in row.index else None
+        ce = _clubelo_team_context(str(team_nm) if team_nm is not None else None)
+        if ce:
+            d.update(ce)
+        players.append(d)
 
     return {
         "count": len(results),
@@ -465,6 +624,151 @@ def tool_get_match(args: dict) -> dict:
     return result
 
 
+def tool_get_sofascore_match(args: dict) -> dict:
+    """
+    SofaScore match-level data from collect_data.collect_sofascore_matches().
+    Provide match_id, or home_team + away_team (optional league, season) to resolve id.
+    """
+    user_mid = args.get("match_id")
+    home_q = args.get("home_team")
+    away_q = args.get("away_team")
+    league_f = args.get("league")
+    season_f = args.get("season")
+    include = (args.get("include") or "all").lower()
+    period = (args.get("period") or "ALL").upper()
+    limit = int(args.get("limit", 500))
+
+    if user_mid is not None:
+        mid = int(user_mid)
+        lookup_method = "match_id"
+    else:
+        if not home_q or not away_q:
+            return {
+                "error": "Provide match_id (SofaScore int), or both home_team and away_team.",
+            }
+        resolved = _resolve_sofascore_match_id(str(home_q), str(away_q), league_f, season_f)
+        if resolved is None:
+            return {
+                "error": (
+                    f"No SofaScore match found for {home_q!r} vs {away_q!r}. "
+                    "Run: python3 collect_data.py --sofascore-matches-only"
+                ),
+            }
+        mid = resolved
+        lookup_method = "team_names"
+
+    out: dict = {"match_id": mid, "lookup_method": lookup_method}
+
+    team_df = _load_parquets("sofascore_match_team_stats__*.parquet")
+    if not team_df.empty and "match_id" in team_df.columns:
+        trows = team_df[team_df["match_id"] == mid]
+        if not trows.empty:
+            prow = trows[trows["period"].astype(str).str.upper() == period]
+            if prow.empty:
+                prow = trows[trows["period"].astype(str).str.upper() == "ALL"]
+            if not prow.empty:
+                r0 = prow.iloc[0]
+                out["home_team"] = r0.get("home_team")
+                out["away_team"] = r0.get("away_team")
+                out["league"] = r0.get("league")
+                out["season"] = r0.get("season")
+
+    want_all = include in ("all", "everything")
+    any_rows = False
+
+    if want_all or include == "shots":
+        sdf = _load_parquets("sofascore_match_shots__*.parquet")
+        if not sdf.empty and "match_id" in sdf.columns:
+            sh = sdf[sdf["match_id"] == mid]
+            out["shots_count"] = len(sh)
+            out["shots"] = [_row_to_dict(r) for _, r in sh.head(limit).iterrows()]
+            if len(out["shots"]) > 0:
+                any_rows = True
+        else:
+            out["shots"] = []
+            out["shots_count"] = 0
+
+    if want_all or include == "team_stats":
+        if team_df.empty:
+            out["team_stats"] = []
+        else:
+            tsub = team_df[team_df["match_id"] == mid]
+            if period != "ALL" and "period" in tsub.columns:
+                tsub = tsub[tsub["period"].astype(str).str.upper() == period]
+            out["team_stats"] = [_row_to_dict(r) for _, r in tsub.iterrows()]
+            if len(out["team_stats"]) > 0:
+                any_rows = True
+
+    if want_all or include == "player_stats":
+        pdf = _load_parquets("sofascore_match_player_stats__*.parquet")
+        if not pdf.empty and "match_id" in pdf.columns:
+            ps = pdf[pdf["match_id"] == mid]
+            out["player_stats_count"] = len(ps)
+            out["player_stats"] = [_row_to_dict(r) for _, r in ps.head(limit).iterrows()]
+            if len(out["player_stats"]) > 0:
+                any_rows = True
+        else:
+            out["player_stats"] = []
+            out["player_stats_count"] = 0
+
+    if want_all or include == "momentum":
+        mdf = _load_parquets("sofascore_match_momentum__*.parquet")
+        if not mdf.empty and "match_id" in mdf.columns:
+            mm = mdf[mdf["match_id"] == mid]
+            out["momentum"] = [_row_to_dict(r) for _, r in mm.iterrows()]
+            if len(out["momentum"]) > 0:
+                any_rows = True
+        else:
+            out["momentum"] = []
+
+    if not any_rows:
+        return {
+            "error": (
+                f"No SofaScore match data for id {mid}. "
+                "Run: python3 collect_data.py --sofascore-matches-only"
+            ),
+        }
+
+    return out
+
+
+def tool_get_club_elo(args: dict) -> dict:
+    """Latest ClubElo global ratings + upcoming fixtures (from collect_clubelo)."""
+    team = args.get("team", "")
+    if not team:
+        return {"error": "team is required (club name, e.g. 'Liverpool' or 'Man City')."}
+
+    ctx = _clubelo_team_context(str(team))
+    if not ctx:
+        return {
+            "error": f"No ClubElo match for {team!r}. Run: python3 collect_data.py (ClubElo step) "
+                     "or check spelling.",
+        }
+
+    out = {"team_query": team, **ctx}
+
+    fix_paths = sorted(RAW_DIR.glob("clubelo__fixtures__*.parquet"))
+    if fix_paths:
+        try:
+            fdf = pd.read_parquet(fix_paths[-1])
+            tlow = team.lower()
+            mask = (
+                fdf["home_team"].astype(str).str.lower().str.contains(tlow, na=False)
+                | fdf["away_team"].astype(str).str.lower().str.contains(tlow, na=False)
+            )
+            hits = fdf[mask].head(15)
+            out["upcoming_fixtures_sample"] = [_row_to_dict(r) for _, r in hits.iterrows()]
+            out["fixtures_file"] = fix_paths[-1].name
+        except Exception as e:
+            out["fixtures_error"] = str(e)
+
+    globs = sorted(RAW_DIR.glob("clubelo__global__*.parquet"))
+    if globs:
+        out["global_ratings_file"] = globs[-1].name
+
+    return out
+
+
 def tool_get_player_history(args: dict) -> dict:
     name         = args.get("name", "")
     history_type = args.get("type", "form")
@@ -587,18 +891,36 @@ def tool_data_status(args: dict) -> dict:
             "understat_match_info":    len(list(RAW_DIR.glob("understat_match_info__*.parquet"))),
             "understat_match_shots":   len(list(RAW_DIR.glob("understat_match_shots__*.parquet"))),
             "understat_rosters":       len(list(RAW_DIR.glob("understat_rosters__*.parquet"))),
+            "sofascore_match_shots":   len(list(RAW_DIR.glob("sofascore_match_shots__*.parquet"))),
+            "sofascore_match_team_stats": len(
+                list(RAW_DIR.glob("sofascore_match_team_stats__*.parquet"))
+            ),
+            "sofascore_match_player_stats": len(
+                list(RAW_DIR.glob("sofascore_match_player_stats__*.parquet"))
+            ),
+            "sofascore_match_momentum": len(
+                list(RAW_DIR.glob("sofascore_match_momentum__*.parquet"))
+            ),
+            "clubelo_global":         len(list(RAW_DIR.glob("clubelo__global__*.parquet"))),
+            "clubelo_fixtures":       len(list(RAW_DIR.glob("clubelo__fixtures__*.parquet"))),
             "transfermarkt_profiles":  len(list(RAW_DIR.glob("transfermarkt__*.parquet"))),
             "transfermarkt_mv_history":len(list(RAW_DIR.glob("transfermarkt_mv_history__*.parquet"))),
             "transfermarkt_transfers": len(list(RAW_DIR.glob("transfermarkt_transfers__*.parquet"))),
             "capology_wages":          len(list(RAW_DIR.glob("capology__*.parquet"))),
         }
 
+    fresh = _freshness_summary()
+    manifest_meta = _manifest_summary()
+
     if df.empty:
-        return {
+        out = {
             "status":    "NO DATA",
             "message":   "Run: python3 collect_data.py",
             "raw_files": raw_counts,
         }
+        out.update(fresh)
+        out.update(manifest_meta)
+        return out
 
     status: dict = {
         "status":    "OK",
@@ -608,6 +930,8 @@ def tool_data_status(args: dict) -> dict:
         "seasons":   sorted(df["season"].unique().tolist()) if "season" in df.columns else [],
         "raw_files": raw_counts,
     }
+    status.update(fresh)
+    status.update(manifest_meta)
 
     key_stats = [
         "goals", "xg", "npxg", "xag", "tackles_won", "interceptions",
@@ -747,6 +1071,43 @@ TOOLS = {
         },
         "fn": tool_get_match,
     },
+    "get_sofascore_match": {
+        "description": (
+            "SofaScore match-level data (requires collect_data --sofascore-matches-only or full run). "
+            "Use SofaScore match_id, or home_team + away_team with optional league/season to resolve id. "
+            "include: 'all' (default), 'shots', 'team_stats', 'player_stats', or 'momentum'. "
+            "period: 'ALL', '1ST', or '2ND' for team_stats rows only (default ALL)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "match_id":   {"type": "integer", "description": "SofaScore event id"},
+                "home_team":  {"type": "string",  "description": "Home club name (with away_team if no match_id)"},
+                "away_team":  {"type": "string",  "description": "Away club name"},
+                "league":     {"type": "string",  "description": "Optional filter when resolving by team names"},
+                "season":     {"type": "string",  "description": "e.g. 2024-2025"},
+                "include":    {"type": "string",  "description": "all | shots | team_stats | player_stats | momentum"},
+                "period":     {"type": "string",  "description": "ALL | 1ST | 2ND for team_stats slice"},
+                "limit":      {"type": "integer", "description": "Max rows for shots/player_stats (default 500)"},
+            },
+            "required": [],
+        },
+        "fn": tool_get_sofascore_match,
+    },
+    "get_club_elo": {
+        "description": (
+            "Look up a club in the latest ClubElo global ratings (strength score + world rank) and "
+            "show a sample of upcoming fixtures with derived win/draw/loss probabilities from ClubElo."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "team": {"type": "string", "description": "Club name (fuzzy-matched to ClubElo club names)"},
+            },
+            "required": ["team"],
+        },
+        "fn": tool_get_club_elo,
+    },
     "get_player_history": {
         "description": (
             "Historical records for a player from Understat or Transfermarkt. "
@@ -770,8 +1131,8 @@ TOOLS = {
     "data_status": {
         "description": (
             "Check what data is available — leagues, seasons, per-season coverage percentages "
-            "for key stats, and counts of all supplementary parquet files "
-            "(match shots, rosters, market value history, wages)."
+            "for key stats, counts of supplementary parquet files, manifest build timestamps "
+            "(last_built_at, oldest_source_fetched_at), and raw .freshness.json age."
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_data_status,
@@ -803,7 +1164,7 @@ def handle_request(req: dict):
         _respond(req_id, {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "soccer-data", "version": "3.0"},
+            "serverInfo": {"name": "soccer-data", "version": "3.1"},
         })
 
     elif method == "tools/list":

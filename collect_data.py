@@ -8,15 +8,19 @@ Sources:
   SofaScore  (via ScraperFC / botasaurus Chrome) — 80+ stats for 37 leagues/comps
 
 Usage:
-  python3 collect_data.py                        # all three sources, 3 seasons
-  python3 collect_data.py --sofascore-only       # SofaScore only (fastest — runs headless)
-  python3 collect_data.py --understat-only       # Understat xG only
-  python3 collect_data.py --fbref-only           # FBref only
+  python3 collect_data.py                        # all sources + SofaScore matches + ClubElo + unified CSV
+  python3 collect_data.py --sofascore-only       # SofaScore season stats only (no per-match pack)
+  python3 collect_data.py --sofascore-matches-only  # SofaScore per-match parquets only
+  python3 collect_data.py --sofascore-matches-only --parallel 5  # same, up to 5 league-seasons at once
+  python3 collect_data.py --clubelo-only         # ClubElo snapshot + fixtures only
+  python3 collect_data.py --no-sofascore-matches # Full run but skip long per-match SofaScore step
+  python3 collect_data.py --no-clubelo           # Full run without ClubElo
   python3 collect_data.py --rebuild-only         # skip scraping, rebuild CSV from raw files
   python3 collect_data.py --seasons 2025-2026 --leagues "England Premier League"
 """
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import re
@@ -24,20 +28,67 @@ import sys
 import time
 import unicodedata
 import random
+from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
 import requests
 
+_LOG_FILE = Path(__file__).parent / "sofascore_scrape.log"
+
+# Console: INFO and above — clean match-by-match progress
+_console_handler = logging.StreamHandler(sys.stderr)
+_console_handler.setLevel(logging.INFO)
+_console_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s  %(message)s", datefmt="%H:%M:%S")
+)
+
+# File: WARNING and above — retry noise, errors, skipped matches
+_file_handler = logging.FileHandler(_LOG_FILE, mode="a", encoding="utf-8")
+_file_handler.setLevel(logging.WARNING)
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s  %(message)s", datefmt="%H:%M:%S")
+)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
+    handlers=[_console_handler, _file_handler],
 )
 log = logging.getLogger(__name__)
 
+# ── Silence botasaurus/websocket noise ─────────────────────────────────────────
+# websocket-client logs "Websocket connected" (INFO) and
+# "Connection to remote host was lost. - goodbye" (ERROR) on every single
+# botasaurus Chrome call.  They go through the "websocket" logger.
+# These are cosmetic CDP lifecycle messages — not errors in our scraper.
+logging.getLogger("websocket").setLevel(logging.CRITICAL)
+
+
+import contextlib as _contextlib
+import os as _os
+
+
+@_contextlib.contextmanager
+def _silence_bota_noise():
+    """
+    Redirect stdout to /dev/null for the duration of the context.
+
+    botasaurus calls print("Running") before every browser fetch.  Since
+    our own logging uses sys.stderr, redirecting stdout is safe and surgically
+    removes the noise without touching our progress output.
+    """
+    with open(_os.devnull, "w") as _devnull:
+        old_stdout, sys.stdout = sys.stdout, _devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+
 DATA_DIR = Path(__file__).parent / "data"
 RAW_DIR  = DATA_DIR / "raw"
+# Sidecar JSON: last fetch time per raw parquet (updated by save_raw).
+FRESHNESS_PATH = RAW_DIR / ".freshness.json"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -375,12 +426,31 @@ def _norm_name(name: str) -> str:
     return " ".join(clean.split())
 
 
+def _update_freshness_record(name: str, row_count: int, path: Path) -> None:
+    """Append/update fetch metadata for one raw dataset (best-effort, single-process safe)."""
+    try:
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        if FRESHNESS_PATH.exists():
+            data = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+        else:
+            data = {}
+        data[name] = {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "rows": int(row_count),
+            "path": str(path),
+        }
+        FRESHNESS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.warning(f"  Could not update freshness sidecar: {e}")
+
+
 def save_raw(df: pd.DataFrame, name: str) -> Path:
     """Save a DataFrame as data/raw/<name>.parquet."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     path = RAW_DIR / f"{name}.parquet"
     df.to_parquet(path, index=False)
     log.info(f"  💾 {len(df)} rows → {path.name}")
+    _update_freshness_record(name, len(df), path)
     return path
 
 
@@ -580,7 +650,12 @@ def collect_sofascore(leagues=None, seasons=None):
             continue
 
         try:
-            valid = ss.get_valid_seasons(league)
+            with _silence_bota_noise():
+                valid = _ss_retry(
+                    ss.get_valid_seasons,
+                    league,
+                    label=f"get_valid_seasons({league})",
+                )
         except Exception as e:
             log.warning(f"  SofaScore get_valid_seasons failed for {league}: {e}")
             continue
@@ -601,7 +676,8 @@ def collect_sofascore(leagues=None, seasons=None):
             log.info(f"[{done}/{total}] 📡 SofaScore: {league} {season} ({ss_year})")
             t0 = time.time()
             try:
-                df = ss.scrape_player_league_stats(ss_year, league, accumulation="total")
+                with _silence_bota_noise():
+                    df = ss.scrape_player_league_stats(ss_year, league, accumulation="total")
 
                 if df is None or df.empty:
                     log.warning(f"  ⚠️  Empty result for {league} {season}")
@@ -630,6 +706,708 @@ def collect_sofascore(leagues=None, seasons=None):
                 log.error(f"  ❌ SofaScore {league} {season}: {e}")
 
             time.sleep(1)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SofaScore retry helper — mimics collect_sofascore's implicit "re-run to retry"
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _ss_retry(fn, *args, retries: int = 3, base_sleep: float = 8.0, label: str = "", **kwargs):
+    """
+    Call fn(*args, **kwargs) up to `retries` times.
+    Returns the result on success, or raises the last exception.
+    An empty DataFrame / empty dict is treated as a failed attempt so that transient
+    botasaurus websocket drops (which return {} instead of raising) get retried too.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            result = fn(*args, **kwargs)
+            # Treat empty-ish returns as transient failures worth retrying
+            empty = (
+                (hasattr(result, "empty") and result.empty)
+                or (isinstance(result, dict) and not result)
+                or (isinstance(result, list) and not result)
+            )
+            if empty and attempt < retries:
+                sleep_s = base_sleep * attempt
+                log.warning(
+                    f"  ⚠️  {label or fn.__name__} returned empty on attempt {attempt}; "
+                    f"retrying in {sleep_s:.0f}s"
+                )
+                time.sleep(sleep_s)
+                continue
+            return result
+        except Exception as e:
+            last_exc = e
+            if attempt < retries:
+                sleep_s = base_sleep * attempt
+                log.warning(
+                    f"  ⚠️  {label or fn.__name__} failed attempt {attempt} ({e}); "
+                    f"retrying in {sleep_s:.0f}s"
+                )
+                time.sleep(sleep_s)
+    if last_exc is not None:
+        raise last_exc
+    # All attempts returned empty — return the last (empty) result
+    return fn(*args, **kwargs)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ClubElo — global ratings + upcoming fixtures (plain HTTP, no browser)
+# ══════════════════════════════════════════════════════════════════════════════
+
+CLUBELO_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _clubelo_scoreline_probs(row: pd.Series) -> tuple[float, float, float]:
+    """Sum R:a-b columns into home win / draw / away win probabilities."""
+    hw, dr, aw = 0.0, 0.0, 0.0
+    for col, val in row.items():
+        if not isinstance(col, str) or not col.startswith("R:"):
+            continue
+        mid = col[2:]
+        if "-" not in mid:
+            continue
+        try:
+            a_str, b_str = mid.split("-", 1)
+            ha, aww = int(a_str), int(b_str)
+            p = float(val)
+        except (ValueError, TypeError):
+            continue
+        if ha > aww:
+            hw += p
+        elif ha == aww:
+            dr += p
+        else:
+            aw += p
+    return hw, dr, aw
+
+
+def collect_clubelo(date: str | None = None) -> None:
+    """
+    Fetch ClubElo global snapshot for one calendar day + upcoming fixtures CSV.
+    Uses http://api.clubelo.com (HTTPS often times out from some networks).
+    """
+    sys.path.insert(0, str(Path(__file__).parent / "src"))
+    from ScraperFC import ClubElo
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    day = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        log.error(f"  ClubElo: invalid date {day!r}, expected YYYY-MM-DD")
+        return
+
+    slug_date = day.replace("-", "_")
+    global_name = f"clubelo__global__{slug_date}"
+    fix_name = f"clubelo__fixtures__{slug_date}"
+    global_path = RAW_DIR / f"{global_name}.parquet"
+    fix_path = RAW_DIR / f"{fix_name}.parquet"
+
+    ce = ClubElo()
+
+    if not global_path.exists():
+        try:
+            log.info(f"📡 ClubElo global snapshot: {day}")
+            gdf = ce.scrape_date(day)
+            gdf = gdf.rename(
+                columns={
+                    "Rank": "rank",
+                    "Club": "club",
+                    "Country": "country",
+                    "Level": "level",
+                    "Elo": "elo",
+                    "From": "valid_from",
+                    "To": "valid_to",
+                }
+            )
+            gdf["snapshot_date"] = day
+            save_raw(gdf, global_name)
+        except Exception as e:
+            log.error(f"  ❌ ClubElo global {day}: {e}")
+    else:
+        log.info(f"⏭️  {global_name}.parquet already exists")
+
+    if not fix_path.exists():
+        try:
+            log.info("📡 ClubElo fixtures (upcoming)")
+            url = "http://api.clubelo.com/Fixtures"
+            r = requests.get(url, headers=CLUBELO_HEADERS, timeout=30)
+            r.raise_for_status()
+            fdf = pd.read_csv(StringIO(r.text))
+            probs = fdf.apply(_clubelo_scoreline_probs, axis=1, result_type="expand")
+            fdf = fdf.rename(
+                columns={
+                    "Date": "date",
+                    "Country": "country",
+                    "Home": "home_team",
+                    "Away": "away_team",
+                }
+            )
+            fdf["home_win_prob"] = probs[0]
+            fdf["draw_prob"] = probs[1]
+            fdf["away_win_prob"] = probs[2]
+            fdf["snapshot_date"] = day
+            keep = [
+                c
+                for c in fdf.columns
+                if c
+                in {
+                    "date",
+                    "country",
+                    "home_team",
+                    "away_team",
+                    "home_win_prob",
+                    "draw_prob",
+                    "away_win_prob",
+                    "snapshot_date",
+                }
+            ]
+            save_raw(fdf[keep], fix_name)
+            log.info(f"  ✅ ClubElo fixtures: {len(fdf)} rows")
+        except Exception as e:
+            log.error(f"  ❌ ClubElo fixtures: {e}")
+    else:
+        log.info(f"⏭️  {fix_name}.parquet already exists")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SofaScore — per-match shots, team stats, player stats, momentum
+# ══════════════════════════════════════════════════════════════════════════════
+
+# SofaScore team-match-stat keys we persist (match-level; not duplicated in season parquet).
+_SS_TEAM_STAT_KEYS = {
+    "ballPossession": ("ball_possession", "pct"),
+    "expectedGoals": ("expected_goals", "float"),
+    "shotsOnGoal": ("shots_on_target", "float"),
+    "shotsOffGoal": ("shots_off_target", "float"),
+    "totalShotsOnGoal": ("total_shots", "float"),
+    "totalShotsInsideBox": ("shots_inside_box", "float"),
+    "totalShotsOutsideBox": ("shots_outside_box", "float"),
+    "finalThirdEntries": ("final_third_entries", "float"),
+    "touchesInOppBox": ("touches_in_opp_box", "float"),
+    "offsides": ("offsides", "float"),
+    "cornerKicks": ("corner_kicks", "float"),
+    "bigChanceCreated": ("big_chances", "float"),
+}
+
+
+def _sofascore_team_stats_to_rows(
+    team_df: pd.DataFrame,
+    match_id: int,
+    home_team: str,
+    away_team: str,
+    league: str,
+    season: str,
+) -> list[dict]:
+    """Pivot long SofaScore team match stats → one dict per period (ALL / 1ST / 2ND)."""
+    if team_df.empty or "period" not in team_df.columns or "key" not in team_df.columns:
+        return []
+    rows: list[dict] = []
+    for period in sorted(team_df["period"].unique()):
+        sub = team_df[team_df["period"] == period]
+        row: dict = {
+            "match_id": match_id,
+            "home_team": home_team,
+            "away_team": away_team,
+            "league": league,
+            "season": season,
+            "period": str(period),
+        }
+        for api_key, (prefix, _kind) in _SS_TEAM_STAT_KEYS.items():
+            hit = sub[sub["key"] == api_key]
+            if hit.empty:
+                row[f"{prefix}_home"] = None
+                row[f"{prefix}_away"] = None
+                continue
+            r0 = hit.iloc[0]
+            hv = r0.get("homeValue")
+            av = r0.get("awayValue")
+            # Prefer numeric homeValue/awayValue when present (SofaScore API).
+            row[f"{prefix}_home"] = float(hv) if pd.notna(hv) else None
+            row[f"{prefix}_away"] = float(av) if pd.notna(av) else None
+        rows.append(row)
+    return rows
+
+
+def _sofascore_shots_slim(shots: pd.DataFrame, match_id: int, league: str, season: str) -> pd.DataFrame:
+    """Normalize shotmap API frame to our slim schema."""
+    if shots.empty:
+        return pd.DataFrame()
+    out = shots.copy()
+    # Normalise xG column name from API
+    for cand in ("xg", "xG", "expectedGoals"):
+        if cand in out.columns and "xg" not in out.columns:
+            out = out.rename(columns={cand: "xg"})
+            break
+    for cand in ("xgot", "xGoT", "expectedGoalsOnTarget"):
+        if cand in out.columns and "xgot" not in out.columns:
+            out = out.rename(columns={cand: "xgot"})
+            break
+    if "player" in out.columns:
+        out["player_id"] = out["player"].apply(
+            lambda x: x.get("id") if isinstance(x, dict) else None
+        )
+        out["player_name"] = out["player"].apply(
+            lambda x: x.get("name") if isinstance(x, dict) else str(x)
+        )
+        out = out.drop(columns=["player"], errors="ignore")
+    coords = out.get("playerCoordinates")
+    if coords is not None:
+        out["player_x"] = coords.apply(lambda x: x.get("x") if isinstance(x, dict) else None)
+        out["player_y"] = coords.apply(lambda x: x.get("y") if isinstance(x, dict) else None)
+        out["player_z"] = coords.apply(lambda x: x.get("z") if isinstance(x, dict) else None)
+        out = out.drop(columns=["playerCoordinates"], errors="ignore")
+    gm = out.get("goalMouthCoordinates")
+    if gm is not None:
+        out["goal_mouth_x"] = gm.apply(lambda x: x.get("x") if isinstance(x, dict) else None)
+        out["goal_mouth_y"] = gm.apply(lambda x: x.get("y") if isinstance(x, dict) else None)
+        out["goal_mouth_z"] = gm.apply(lambda x: x.get("z") if isinstance(x, dict) else None)
+        out = out.drop(columns=["goalMouthCoordinates"], errors="ignore")
+    out["match_id"] = match_id
+    out["league"] = league
+    out["season"] = season
+    want = [
+        "match_id",
+        "player_id",
+        "player_name",
+        "isHome",
+        "time",
+        "shotType",
+        "situation",
+        "bodyPart",
+        "xg",
+        "xgot",
+        "goalMouthLocation",
+        "player_x",
+        "player_y",
+        "goal_mouth_x",
+        "goal_mouth_y",
+        "league",
+        "season",
+    ]
+    for c in want:
+        if c not in out.columns:
+            out[c] = None
+    slim = out[want].rename(
+        columns={
+            "isHome": "is_home",
+            "time": "minute",
+            "shotType": "shot_type",
+            "bodyPart": "body_part",
+            "goalMouthLocation": "goal_mouth_location",
+        }
+    )
+    return slim
+
+
+def _sofascore_player_match_slim(
+    pm: pd.DataFrame, match_id: int, home_id: int, league: str, season: str
+) -> pd.DataFrame:
+    """Keep only columns not already covered by season-level SofaScore parquet."""
+    if pm.empty:
+        return pd.DataFrame()
+    df = pm.loc[:, ~pm.columns.duplicated()].copy()
+    df["match_id"] = match_id
+    df["league"] = league
+    df["season"] = season
+    df["is_home"] = df["teamId"].apply(lambda tid: bool(tid == home_id) if pd.notna(tid) else None)
+    rename = {
+        "id": "player_id",
+        "name": "player_name",
+        "teamId": "team_id",
+        "teamName": "team_name",
+        "substitute": "substitute",
+        "minutesPlayed": "minutes_played",
+        "rating": "rating",
+        "expectedGoals": "xg",
+        "expectedGoalsOnTarget": "xgot",
+        "expectedAssists": "xa",
+        "goals": "goals",
+        "goalAssist": "assists",
+        "totalShots": "total_shots",
+        "onTargetScoringAttempt": "shots_on_target",
+        "totalPass": "total_passes",
+        "accuratePass": "accurate_passes",
+        "touches": "touches",
+        "possessionLostCtrl": "possession_lost",
+        "duelWon": "duels_won",
+        "duelLost": "duels_lost",
+        "fouls": "fouls",
+        "wasFouled": "was_fouled",
+    }
+    for old, new in rename.items():
+        if old in df.columns and new not in df.columns:
+            df[new] = df[old]
+    cols = [
+        "match_id",
+        "player_id",
+        "player_name",
+        "team_id",
+        "team_name",
+        "is_home",
+        "substitute",
+        "minutes_played",
+        "rating",
+        "xg",
+        "xgot",
+        "xa",
+        "goals",
+        "assists",
+        "total_shots",
+        "shots_on_target",
+        "total_passes",
+        "accurate_passes",
+        "touches",
+        "possession_lost",
+        "duels_won",
+        "duels_lost",
+        "fouls",
+        "was_fouled",
+        "league",
+        "season",
+    ]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    return df[cols]
+
+
+def _ckpt_flush(
+    slug: str,
+    done_ids: set,
+    all_shots: list,
+    all_team_rows: list,
+    all_play: list,
+    all_mom: list,
+    p_shots: Path,
+    p_team: Path,
+    p_play: Path,
+    p_mom: Path,
+    p_ckpt: Path,
+) -> None:
+    """
+    Flush accumulated in-memory data to partial parquet files and write the
+    checkpoint JSON.  Called every FLUSH_EVERY matches so a crashed run can
+    resume from the last flush point rather than starting over.
+    """
+    try:
+        if all_shots:
+            pd.concat(all_shots, ignore_index=True).to_parquet(p_shots, index=False)
+        if all_team_rows:
+            pd.DataFrame(all_team_rows).to_parquet(p_team, index=False)
+        if all_play:
+            pd.concat(all_play, ignore_index=True).to_parquet(p_play, index=False)
+        if all_mom:
+            pd.concat(all_mom, ignore_index=True).to_parquet(p_mom, index=False)
+        p_ckpt.write_text(
+            json.dumps({"slug": slug, "done_ids": sorted(done_ids)}),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        log.warning(f"  ⚠️  Checkpoint flush failed: {exc}")
+
+
+def _discover_sofascore_match_jobs(
+    leagues: list[str] | None,
+    seasons: list[str] | None,
+    sleep_between_matches: float,
+    force: bool,
+) -> list[tuple[str, str, float, bool]]:
+    """
+    Build the list of (league, season, sleep_between_matches, force) tuples that
+    still need scraping.  Skips unsupported leagues, unavailable seasons, and
+    league-seasons whose four parquet outputs already exist (unless force=True).
+    """
+    sys.path.insert(0, str(Path(__file__).parent / "src"))
+    from ScraperFC import Sofascore
+    from ScraperFC.utils import get_module_comps
+
+    all_ss_leagues = list(get_module_comps("SOFASCORE").keys())
+    use_leagues = leagues or list(SOFASCORE_TARGET_LEAGUES)
+    use_seasons = seasons or list(SEASONS)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    ss = Sofascore()
+    jobs: list[tuple[str, str, float, bool]] = []
+
+    for league in use_leagues:
+        if league not in all_ss_leagues:
+            log.info(f"  SofaScore matches: {league!r} not supported, skipping")
+            continue
+        try:
+            with _silence_bota_noise():
+                valid = _ss_retry(
+                    ss.get_valid_seasons,
+                    league,
+                    label=f"get_valid_seasons({league})",
+                )
+        except Exception as e:
+            log.warning(f"  SofaScore matches get_valid_seasons failed for {league}: {e}")
+            continue
+
+        for season in use_seasons:
+            ss_year = SOFASCORE_SEASONS.get(season)
+            if not ss_year or ss_year not in valid:
+                log.info(
+                    f"  SofaScore matches: {league} {season} — not available ({ss_year!r})"
+                )
+                continue
+
+            slug = f"{league.replace(' ', '_')}__{season.replace('-', '_')}"
+            p_shots = RAW_DIR / f"sofascore_match_shots__{slug}.parquet"
+            p_team = RAW_DIR / f"sofascore_match_team_stats__{slug}.parquet"
+            p_play = RAW_DIR / f"sofascore_match_player_stats__{slug}.parquet"
+            p_mom = RAW_DIR / f"sofascore_match_momentum__{slug}.parquet"
+            if not force and p_shots.exists() and p_team.exists() and p_play.exists() and p_mom.exists():
+                log.info(f"⏭️  SofaScore match pack complete for {slug}")
+                continue
+            jobs.append((league, season, sleep_between_matches, force))
+    return jobs
+
+
+def _sofascore_match_season_worker(
+    job: tuple[str, str, float, bool],
+) -> None:
+    """
+    Scrape one league+season match pack (four parquets).  Top-level so it can be
+    pickled for ProcessPoolExecutor (macOS spawn).
+    """
+    league, season, sleep_between_matches, force = job
+    pfx = f"[{league} | {season}]"
+
+    sys.path.insert(0, str(Path(__file__).parent / "src"))
+    from ScraperFC import Sofascore
+    from ScraperFC.utils import get_module_comps
+
+    all_ss_leagues = list(get_module_comps("SOFASCORE").keys())
+    if league not in all_ss_leagues:
+        log.info(f"{pfx}  not supported, skipping")
+        return
+
+    ss = Sofascore()
+    try:
+        with _silence_bota_noise():
+            valid = _ss_retry(
+                ss.get_valid_seasons,
+                league,
+                label=f"get_valid_seasons({league})",
+            )
+    except Exception as e:
+        log.warning(f"{pfx}  get_valid_seasons failed: {e}")
+        return
+
+    ss_year = SOFASCORE_SEASONS.get(season)
+    if not ss_year or ss_year not in valid:
+        log.info(f"{pfx}  season not on SofaScore ({ss_year!r}), skipping")
+        return
+
+    slug = f"{league.replace(' ', '_')}__{season.replace('-', '_')}"
+    p_shots = RAW_DIR / f"sofascore_match_shots__{slug}.parquet"
+    p_team = RAW_DIR / f"sofascore_match_team_stats__{slug}.parquet"
+    p_play = RAW_DIR / f"sofascore_match_player_stats__{slug}.parquet"
+    p_mom = RAW_DIR / f"sofascore_match_momentum__{slug}.parquet"
+    p_ckpt = RAW_DIR / f"sofascore_match_checkpoint__{slug}.json"
+
+    if not force and p_shots.exists() and p_team.exists() and p_play.exists() and p_mom.exists():
+        log.info(f"{pfx}  ⏭️  match pack already complete")
+        return
+
+    done_ids: set[int] = set()
+    if not force and p_ckpt.exists():
+        try:
+            done_ids = set(json.loads(p_ckpt.read_text()).get("done_ids", []))
+        except Exception:
+            pass
+
+    def _load_partial(path: Path) -> pd.DataFrame:
+        if path.exists() and done_ids:
+            try:
+                return pd.read_parquet(path)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
+    all_shots: list[pd.DataFrame] = [df for df in [_load_partial(p_shots)] if not df.empty]
+    all_team_rows: list[dict] = (
+        _load_partial(p_team).to_dict("records") if p_team.exists() and done_ids else []
+    )
+    all_play: list[pd.DataFrame] = [df for df in [_load_partial(p_play)] if not df.empty]
+    all_mom: list[pd.DataFrame] = [df for df in [_load_partial(p_mom)] if not df.empty]
+
+    if done_ids:
+        log.info(f"{pfx}  📂 resuming: {len(done_ids)} matches already done")
+
+    log.info(f"{pfx}  📡 SofaScore matches ({ss_year})")
+    log.info(f"{pfx}  ⏳ fetching match list …")
+    try:
+        with _silence_bota_noise():
+            match_dicts = _ss_retry(
+                ss.get_match_dicts,
+                ss_year,
+                league,
+                label=f"get_match_dicts({league} {ss_year})",
+            )
+    except Exception as e:
+        log.error(f"{pfx}  ❌ get_match_dicts: {e}")
+        return
+
+    finished = [
+        m
+        for m in match_dicts
+        if isinstance(m.get("status"), dict) and m["status"].get("type") == "finished"
+    ]
+    match_seq = {int(m["id"]): i for i, m in enumerate(finished, 1)}
+    remaining = [m for m in finished if int(m["id"]) not in done_ids]
+    log.info(
+        f"{pfx}  ✅ {len(finished)} finished matches total, "
+        f"{len(remaining)} remaining to scrape"
+    )
+
+    if not remaining:
+        log.info(f"{pfx}  all matches already done — writing final parquets")
+    else:
+        FLUSH_EVERY = 25
+
+        for idx, m in enumerate(remaining, 1):
+            mid = int(m["id"])
+            home = m.get("homeTeam", {}) or {}
+            away = m.get("awayTeam", {}) or {}
+            home_team = home.get("name", "")
+            away_team = away.get("name", "")
+            home_id = int(home.get("id", 0))
+
+            global_idx = match_seq.get(mid, idx)
+            log.info(
+                f"{pfx}  [{global_idx}/{len(finished)}] "
+                f"{home_team} vs {away_team} (id={mid})"
+            )
+
+            try:
+                with _silence_bota_noise():
+                    sdf = _ss_retry(ss.scrape_match_shots, mid, label=f"shots {mid}")
+                all_shots.append(_sofascore_shots_slim(sdf, mid, league, season))
+            except Exception as e:
+                log.warning(f"{pfx}    shots match {mid}: {e}")
+
+            try:
+                with _silence_bota_noise():
+                    tdf = _ss_retry(
+                        ss.scrape_team_match_stats, mid, label=f"team_stats {mid}"
+                    )
+                all_team_rows.extend(
+                    _sofascore_team_stats_to_rows(
+                        tdf, mid, home_team, away_team, league, season
+                    )
+                )
+            except Exception as e:
+                log.warning(f"{pfx}    team stats match {mid}: {e}")
+
+            try:
+                with _silence_bota_noise():
+                    pdf = _ss_retry(
+                        ss.scrape_player_match_stats, mid, label=f"player_stats {mid}"
+                    )
+                all_play.append(
+                    _sofascore_player_match_slim(pdf, mid, home_id, league, season)
+                )
+            except Exception as e:
+                log.warning(f"{pfx}    player stats match {mid}: {e}")
+
+            try:
+                with _silence_bota_noise():
+                    mdf = _ss_retry(ss.scrape_match_momentum, mid, label=f"momentum {mid}")
+                if not mdf.empty:
+                    mdf = mdf.copy()
+                    mdf["match_id"] = mid
+                    mdf["league"] = league
+                    mdf["season"] = season
+                    all_mom.append(mdf)
+            except Exception as e:
+                log.warning(f"{pfx}    momentum match {mid}: {e}")
+
+            done_ids.add(mid)
+            time.sleep(sleep_between_matches)
+
+            if idx % FLUSH_EVERY == 0:
+                log.info(f"{pfx}  💾 checkpoint flush at {global_idx}/{len(finished)} …")
+                _ckpt_flush(
+                    slug,
+                    done_ids,
+                    all_shots,
+                    all_team_rows,
+                    all_play,
+                    all_mom,
+                    p_shots,
+                    p_team,
+                    p_play,
+                    p_mom,
+                    p_ckpt,
+                )
+
+    shots_df = pd.concat(all_shots, ignore_index=True) if all_shots else pd.DataFrame()
+    team_df = pd.DataFrame(all_team_rows) if all_team_rows else pd.DataFrame()
+    play_df = pd.concat(all_play, ignore_index=True) if all_play else pd.DataFrame()
+    mom_df = pd.concat(all_mom, ignore_index=True) if all_mom else pd.DataFrame()
+
+    save_raw(shots_df, f"sofascore_match_shots__{slug}")
+    save_raw(team_df, f"sofascore_match_team_stats__{slug}")
+    save_raw(play_df, f"sofascore_match_player_stats__{slug}")
+    save_raw(mom_df, f"sofascore_match_momentum__{slug}")
+
+    if p_ckpt.exists():
+        p_ckpt.unlink()
+
+    log.info(
+        f"{pfx}  ✅ saved: shots={len(shots_df)} team_rows={len(team_df)} "
+        f"player_rows={len(play_df)} momentum_rows={len(mom_df)}"
+    )
+
+
+def collect_sofascore_matches(
+    leagues=None,
+    seasons=None,
+    sleep_between_matches: float = 2.0,
+    force: bool = False,
+    parallel: int = 1,
+) -> None:
+    """
+    Per-match SofaScore data: shot map, team stats (by half), player match stats, momentum.
+    Writes four parquet files per league+season. Skips a league+season if all four exist
+    unless force=True.
+
+    parallel: if >1, run that many league-season jobs at once in separate processes
+    (safe with Bright Data — each job writes different files; IPs rotate per request).
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    jobs = _discover_sofascore_match_jobs(leagues, seasons, sleep_between_matches, force)
+    if not jobs:
+        log.info("SofaScore matches: nothing to do (all packs complete or unavailable).")
+        return
+
+    log.info(f"SofaScore match jobs queued: {len(jobs)}  (parallel={parallel})")
+
+    if parallel <= 1:
+        for job in jobs:
+            _sofascore_match_season_worker(job)
+        return
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=parallel) as pool:
+        futures = {
+            pool.submit(_sofascore_match_season_worker, job): job for job in jobs
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            job = futures[fut]
+            try:
+                fut.result()
+            except Exception as exc:
+                log.error(
+                    f"SofaScore match job crashed: {job[0]} {job[1]} — {exc}"
+                )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1236,7 +2014,8 @@ def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
 _NON_FBREF_PREFIXES = (
     "understat__", "understat_league_table__", "understat_match_info__",
     "understat_match_shots__", "understat_rosters__",
-    "sofascore__",
+    "sofascore__", "sofascore_match_",
+    "clubelo__",
     "transfermarkt__", "transfermarkt_mv_history__", "transfermarkt_transfers__",
     "capology__",
 )
@@ -1537,7 +2316,25 @@ def _finalize_and_save(unified: pd.DataFrame) -> pd.DataFrame:
         "xg_available":  bool("xg" in unified.columns and (unified["xg"] > 0).any()),
         "rating_available": bool("sofascore_rating" in unified.columns and
                                  (unified["sofascore_rating"] > 0).any()),
+        "last_built_at": datetime.now(timezone.utc).isoformat(),
     }
+    oldest = None
+    if FRESHNESS_PATH.exists():
+        try:
+            fr = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+            for _k, meta in fr.items():
+                ts = meta.get("fetched_at")
+                if not ts:
+                    continue
+                try:
+                    # fromisoformat accepts +00:00
+                    t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                oldest = t if oldest is None or t < oldest else oldest
+        except Exception as e:
+            log.warning(f"Could not read freshness for manifest: {e}")
+    manifest["oldest_source_fetched_at"] = oldest.isoformat() if oldest else None
     (DATA_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     log.info("📋 Manifest saved")
     return unified
@@ -1652,6 +2449,24 @@ def main():
     p.add_argument("--understat-tables-only",   action="store_true", help="Run Understat league tables only (fast)")
     p.add_argument("--understat-matches-only",  action="store_true", help="Run Understat match shots + rosters only (~90 min)")
     p.add_argument("--sofascore-only",          action="store_true")
+    p.add_argument("--sofascore-matches-only",  action="store_true",
+                   help="SofaScore per-match shots / team / player / momentum only (~hours)")
+    p.add_argument("--clubelo-only",            action="store_true",
+                   help="ClubElo global ratings + fixtures (HTTP, seconds)")
+    p.add_argument("--clubelo-date",            type=str, default=None,
+                   help="YYYY-MM-DD for ClubElo global snapshot (default: today UTC)")
+    p.add_argument("--force-matches",             action="store_true",
+                   help="Re-fetch SofaScore match parquets even if all four exist")
+    p.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "SofaScore per-match: run up to N league-season jobs in parallel processes "
+            "(default: 1). Safe with Bright Data — each job writes its own parquet files."
+        ),
+    )
     p.add_argument("--transfermarkt-only",      action="store_true", help="Run Transfermarkt player profiles only (~6 hrs)")
     p.add_argument("--capology-only",           action="store_true", help="Run Capology wages only (~2 hrs)")
     p.add_argument("--rebuild-only",            action="store_true", help="Skip scraping; rebuild unified CSV from raw files")
@@ -1659,6 +2474,9 @@ def main():
     p.add_argument("--no-fbref",                action="store_true")
     p.add_argument("--no-understat",            action="store_true")
     p.add_argument("--no-sofascore",            action="store_true")
+    p.add_argument("--no-sofascore-matches",    action="store_true",
+                   help="Skip SofaScore per-match collection on full runs")
+    p.add_argument("--no-clubelo",              action="store_true", help="Skip ClubElo snapshot on full runs")
     p.add_argument("--no-transfermarkt",        action="store_true")
     p.add_argument("--no-capology",             action="store_true")
     args = p.parse_args()
@@ -1674,6 +2492,8 @@ def main():
         ("understat_tables",  args.understat_tables_only),
         ("understat_matches", args.understat_matches_only),
         ("sofascore",         args.sofascore_only),
+        ("sofascore_matches", args.sofascore_matches_only),
+        ("clubelo",           args.clubelo_only),
         ("transfermarkt",     args.transfermarkt_only),
         ("capology",          args.capology_only),
     ]
@@ -1714,6 +2534,35 @@ def main():
             collect_sofascore(leagues=leagues, seasons=seasons)
             print()
 
+        run_sofascore_matches = (
+            active_only == "sofascore_matches"
+            or (
+                active_only is None
+                and not args.no_sofascore_matches
+                and not args.no_sofascore
+            )
+        )
+        if run_sofascore_matches:
+            print("── SofaScore per-match (shots, team stats, player stats, momentum) ─")
+            pw = max(1, int(args.parallel))
+            if pw > 1:
+                print(f"Parallel workers : {pw}")
+            collect_sofascore_matches(
+                leagues=leagues,
+                seasons=seasons,
+                force=args.force_matches,
+                parallel=pw,
+            )
+            print()
+
+        run_clubelo = active_only == "clubelo" or (
+            active_only is None and not args.no_clubelo
+        )
+        if run_clubelo:
+            print("── ClubElo (ratings + fixtures) ─────────────────────────────────────")
+            collect_clubelo(date=args.clubelo_date)
+            print()
+
         if _run("fbref"):
             print("── FBref (basic stats, 8 leagues) ──────────────────────────────────")
             collect_fbref(leagues=leagues or FBREF_LEAGUES,
@@ -1733,7 +2582,8 @@ def main():
     # Only rebuild when: explicit --rebuild-only, full run (no active_only), or
     # a source that feeds unified CSV was just collected (not tables/matches/TM/Capology alone)
     supplementary_only = active_only in (
-        "understat_tables", "understat_matches", "transfermarkt", "capology"
+        "understat_tables", "understat_matches", "transfermarkt", "capology",
+        "sofascore_matches", "clubelo",
     )
     if not supplementary_only:
         print("── Building unified CSV ─────────────────────────────────────────────")
