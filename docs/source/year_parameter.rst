@@ -9,15 +9,6 @@ argument.
 Regardless of module, if you enter an invalid year argument, the InvalidYearException will be raised
 and the error printout should show a list of valid years.
 
-.. _capology_year:
-
-Capology
---------
-- Type: `str`
-- Format: "2023-24". This should match the values in the year dropdown for the league on the
-  Capology website.
-- `get_valid_seasons()`: Will return a list of strings of the valid seasons for the chosen league.
-
 .. _fbref_year:
 
 FBref

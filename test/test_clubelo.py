@@ -6,6 +6,9 @@ from contextlib import nullcontext as does_not_raise
 sys.path.append('./src/')
 from ScraperFC import ClubElo
 
+
+# Live HTTP calls to api.clubelo.com — excluded from default CI via tox ``-m "not integration"``.
+@pytest.mark.integration
 class TestClubElo:
 
     # ==============================================================================================

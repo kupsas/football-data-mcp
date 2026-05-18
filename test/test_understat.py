@@ -13,6 +13,8 @@ from ScraperFC.utils import get_module_comps
 comps = get_module_comps("UNDERSTAT")
 
 
+# Live requests to understat.com — excluded from default CI via tox ``-m "not integration"``.
+@pytest.mark.integration
 class TestUnderstat:
 
     # ==============================================================================================
