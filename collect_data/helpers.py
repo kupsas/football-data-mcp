@@ -13,6 +13,11 @@ import unicodedata
 log = logging.getLogger(__name__)
 
 
+def fbref_season_to_understat(season: str) -> str:
+    """Map ``'2025-2026'`` → calendar year string Understat APIs use (``'2025'``)."""
+    return season.split("-")[0]
+
+
 @contextlib.contextmanager
 def _silence_bota_noise():
     """

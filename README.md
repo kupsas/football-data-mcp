@@ -123,7 +123,13 @@ Transfermarkt financial data (market value, contract, nationality) covers the 8 
 ```
 football-data-mcp/
 ├── collect_data.py          # Compatibility CLI wrapper (runs ``python -m collect_data``)
-├── collect_data/            # Pipeline package (config, storage, helpers, pipeline.py)
+├── collect_data/            # Pipeline package
+│   ├── config.py            # League lists, rename maps, seasons
+│   ├── storage.py           # Raw paths, save_raw, CheckpointTracker, freshness
+│   ├── helpers.py           # Name normalisation, retries, season helpers
+│   ├── pipeline.py          # ``main()`` CLI (argparse + dispatch)
+│   ├── collectors/        # One module per source (fbref, understat, …)
+│   └── build/               # ``unified.py`` + ``financials.py`` merge layer
 ├── soccer_server.py         # MCP server (8 tools)
 ├── src/ScraperFC/           # ScraperFC scrapers (upstream: oseymour/ScraperFC)
 └── data/
