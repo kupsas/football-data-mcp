@@ -32,7 +32,9 @@ dependencies = [
     "marimo>=0.19.11",
     "numpy>=2.0.2",
     "pandas>=2.2.3",
+    "pyarrow>=15.0.0",
     "pyyaml>=6.0.2",
+    "rapidfuzz>=3.0.0",
     "requests>=2.32.3",
     "rootutils>=1.0.7",
     "selenium>=4.28.1",
@@ -91,6 +93,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
 "ScraperFC" = ["comps.yaml"]
+
+# Top-level ``collect_data`` package (CLI / pipeline) plus ``src/ScraperFC`` for editable installs and tox.
+[tool.setuptools.packages.find]
+where = [".", "src"]
+include = ["ScraperFC*", "collect_data*"]
 
 # -- Typechecking ----------------------------------------------------------------------------------
 [tool.mypy]

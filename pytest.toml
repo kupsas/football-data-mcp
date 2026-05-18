@@ -1,7 +1,7 @@
 [pytest]
-addopts = ["-s", "-v", "--cov=ScraperFC"]
+addopts = ["-s", "-v", "--cov=ScraperFC", "--cov=collect_data"]
 norecursedirs = ["docs", "*.egg-info", ".git", ".tox"]
 markers = [
     "integration: live network / headless Chrome (skip in CI with -m 'not integration')",
-    "contract: one-shot upstream shape checks for the weekly canary workflow",
+    "contract: minimal upstream shape checks (rate-limited; skip with -m 'not contract')",
 ]

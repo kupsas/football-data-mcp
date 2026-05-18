@@ -44,26 +44,28 @@ Once connected, Claude can use these tools directly in conversation:
 
 ```bash
 pip install -e .
-pip install rapidfuzz
 ```
 
 ### 2. Collect the data
 
 ```bash
 # Full collection (takes a while — runs headless Chrome for FBref + SofaScore)
-python3 collect_data.py
+python3 -m collect_data
+# (equivalent: python3 collect_data.py — thin wrapper around the package)
 
 # Individual sources
-python3 collect_data.py --sofascore-only
-python3 collect_data.py --understat-only
-python3 collect_data.py --transfermarkt-only
+python3 -m collect_data --sofascore-only
+python3 -m collect_data --understat-only
+python3 -m collect_data --transfermarkt-only
 
 # Supplementary data (xG tables, match shots, rosters)
-python3 collect_data.py --understat-tables-only
-python3 collect_data.py --understat-matches-only
+python3 -m collect_data --understat-tables-only
+python3 -m collect_data --understat-matches-only
 
-# Rebuild the unified CSV from already-collected raw files
-python3 collect_data.py --rebuild-only
+# Rebuild the unified Parquet from already-collected raw files
+python3 -m collect_data --rebuild-only
+# Optional spreadsheet export alongside Parquet:
+python3 -m collect_data --rebuild-only --export-csv
 ```
 
 ### 3. Connect to Claude Desktop
@@ -90,7 +92,10 @@ Restart Claude Desktop. The 8 tools will appear automatically.
 
 ## Data files
 
-Raw files are stored in `data/raw/` and the merged dataset at `data/unified_player_stats.csv`.
+Raw files are stored in `data/raw/`. The merged player table is written to
+`data/unified_player_stats.parquet` (and optionally `data/unified_player_stats.csv`
+if you pass ``--export-csv``). The MCP server reads Parquet first and falls back
+to CSV for older installs.
 
 ---
 
@@ -117,12 +122,20 @@ Transfermarkt financial data (market value, contract, nationality) covers the 8 
 
 ```
 football-data-mcp/
-├── collect_data.py          # Full data pipeline (scrape → merge → save)
+├── collect_data.py          # Compatibility CLI wrapper (runs ``python -m collect_data``)
+├── collect_data/            # Pipeline package
+│   ├── config.py            # League lists, rename maps, seasons
+│   ├── storage.py           # Raw paths, save_raw, CheckpointTracker, freshness
+│   ├── helpers.py           # Name normalisation, retries, season helpers
+│   ├── pipeline.py          # ``main()`` CLI (argparse + dispatch)
+│   ├── collectors/        # One module per source (fbref, understat, …)
+│   └── build/               # ``unified.py`` + ``financials.py`` merge layer
 ├── soccer_server.py         # MCP server (8 tools)
 ├── src/ScraperFC/           # ScraperFC scrapers (upstream: oseymour/ScraperFC)
 └── data/
-    ├── unified_player_stats.csv   # Main merged dataset (gitignored)
-    └── raw/                       # Per-source parquet files (gitignored)
+    ├── unified_player_stats.parquet   # Main merged dataset (gitignored)
+    ├── unified_player_stats.csv       # Optional export (gitignored)
+    └── raw/                           # Per-source parquet files (gitignored)
 ```
 
 ---
@@ -131,7 +144,7 @@ football-data-mcp/
 
 This project builds on [ScraperFC](https://github.com/oseymour/ScraperFC). Bug fixes to the underlying scrapers are contributed back upstream — if you find something broken in a scraper, consider opening an issue or PR there too.
 
-For issues specific to the pipeline (`collect_data.py`) or the MCP server (`soccer_server.py`), open an issue here.
+For issues specific to the pipeline (`collect_data` package / `collect_data.py` entry) or the MCP server (`soccer_server.py`), open an issue here.
 
 ---
 
