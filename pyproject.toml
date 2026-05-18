@@ -1,8 +1,8 @@
 [project]
 # -- Metadata --------------------------------------------------------------------------------------
-name = "ScraperFC"
-version = "4.5.0"
-description = "Package for scraping soccer data from a variety of sources."
+name = "football-mcp"
+version = "0.1.0"
+description = "Football data pipeline, MCP server tools, and pluggable storage for soccer analytics."
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">= 3.10"
@@ -10,10 +10,11 @@ keywords = [
     "webscraping", "scraping", "soccer", "football", "soccer data", "football data",
     "English Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League",
     "World Cup", "FBref", "Sofascore", "ClubElo", "Capology", "Understat", "Transfermarkt",
+    "MCP", "analytics",
 ]
+# Original ScraperFC package author: Owen Seymour <osmour043@gmail.com>
 authors = [
-    {email = "osmour043@gmail.com"},
-    {name = "Owen Seymour"}
+    { name = "Sai Sashank Kuppa", email = "hello@kupsas.com" },
 ]
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
@@ -86,8 +87,12 @@ r2 = [
 ]
 
 [project.urls]
-repository = "https://github.com/oseymour/ScraperFC/"
+repository = "https://github.com/kupsas/football-data-mcp"
 documentation = "https://scraperfc.readthedocs.io/en/latest/"
+
+[project.scripts]
+soccer-mcp = "soccer_server.transport_stdio:main"
+collect-data = "collect_data.__main__:main"
 
 # -- Build system ----------------------------------------------------------------------------------
 [build-system]
