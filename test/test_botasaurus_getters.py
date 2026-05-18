@@ -15,9 +15,10 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rootutils import find_root
 
-# Same pattern as other tests: import the local src tree before ScraperFC.
-sys.path.append("./src/")
+# Resolve ``src`` from the repo root so tests work regardless of cwd (no hard-coded paths).
+sys.path.append(str(find_root() / "src"))
 
 from ScraperFC.utils import botasaurus_getters as bg  # noqa: E402
 

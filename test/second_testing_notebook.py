@@ -7,8 +7,10 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import sys
+    from rootutils import find_root
 
-    sys.path.append("../src")  # import local scraperfc
+    # Same as other notebooks/tests: anchor to repo root, not a relative folder name.
+    sys.path.append(str(find_root() / "src"))
     import ScraperFC as sfc
     return (sfc,)
 

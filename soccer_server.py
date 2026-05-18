@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 DATA_DIR    = Path(__file__).parent / "data"
 RAW_DIR     = DATA_DIR / "raw"
+UNIFIED_PARQUET = DATA_DIR / "unified_player_stats.parquet"
 UNIFIED_CSV = DATA_DIR / "unified_player_stats.csv"
 FRESHNESS_PATH = RAW_DIR / ".freshness.json"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
@@ -47,13 +48,17 @@ def _load_data() -> pd.DataFrame:
     if _df is not None:
         return _df
 
-    if not UNIFIED_CSV.exists():
-        log.warning(f"Data file not found: {UNIFIED_CSV} — run collect_data.py first.")
+    if UNIFIED_PARQUET.exists():
+        df = pd.read_parquet(UNIFIED_PARQUET)
+    elif UNIFIED_CSV.exists():
+        df = pd.read_csv(UNIFIED_CSV, low_memory=False)
+    else:
+        log.warning(
+            f"No unified table found ({UNIFIED_PARQUET.name} or {UNIFIED_CSV.name}) — "
+            "run ``python -m collect_data`` first."
+        )
         return pd.DataFrame()
 
-    df = pd.read_csv(UNIFIED_CSV, low_memory=False)
-
-    # Keep these as strings; everything else gets coerced to numeric
     id_cols = {
         "player", "nation", "pos", "team", "league", "season",
         "player_id", "team_id", "understat_id", "tm_id",
@@ -914,7 +919,7 @@ def tool_data_status(args: dict) -> dict:
     if df.empty:
         out = {
             "status":    "NO DATA",
-            "message":   "Run: python3 collect_data.py",
+            "message":   "Run: python -m collect_data",
             "raw_files": raw_counts,
         }
         out.update(fresh)

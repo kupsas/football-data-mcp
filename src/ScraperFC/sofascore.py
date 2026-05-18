@@ -563,18 +563,18 @@ class Sofascore:
             if "statistics" in result:
                 # Team has league stats, build series with them
                 team_stats_dict = result["statistics"]
-                team_row = pd.Series(team_stats_dict)
+                team_series = pd.Series(team_stats_dict)
             else:
                 # This team has no stats, build an empty series for their row
-                team_row = pd.Series()
+                team_series = pd.Series(dtype=object)
 
-            # Insert team name and ID into series and convert to DataFrame row
-            team_row["teamId"] = team_id
-            team_row["teamName"] = team["name"]
-            team_row = team_row.to_frame().T
+            # Insert team name and ID into series, then one-row DataFrame for concat (separate names for mypy).
+            team_series["teamId"] = team_id
+            team_series["teamName"] = team["name"]
+            team_row_df = team_series.to_frame().T
 
             # Append the team row to the main DataFrame
-            df = pd.concat([df, team_row], axis=0, ignore_index=True)
+            df = pd.concat([df, team_row_df], axis=0, ignore_index=True)
 
         # Reorder columns so that team name and ID are first
         df = pd.concat(

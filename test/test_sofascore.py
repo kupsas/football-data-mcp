@@ -19,8 +19,10 @@ import numpy as np
 import pandas as pd
 import pytest
 from contextlib import nullcontext as does_not_raise
+from rootutils import find_root
 
-sys.path.append("./src/")
+# Resolve ``src`` from the repo root so tests work regardless of cwd (no hard-coded paths).
+sys.path.append(str(find_root() / "src"))
 from ScraperFC import Sofascore  # noqa: E402
 from ScraperFC.scraperfc_exceptions import InvalidLeagueException, InvalidYearException  # noqa: E402
 from ScraperFC.utils import get_module_comps  # noqa: E402
