@@ -1,4 +1,4 @@
-"""Shared helpers for MCP tools: filtering, ClubElo / SofaScore resolution, storage reads."""
+"""Shared helpers for MCP tools: filtering, ClubElo / SofaScore resolution, DuckDB reads."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from collect_data.storage import get_backend, load_parquets
+from collect_data.storage import get_backend
+from soccer_server import db
 
 
 def _parse_age(v: object) -> float:
@@ -47,6 +48,7 @@ def _filter(
     min_minutes: int | None = None,
     nation: str | None = None,
 ) -> pd.DataFrame:
+    """Filter a unified DataFrame in memory (used after DuckDB load)."""
     if player:
         df = df[df["_player_lower"].str.contains(player.lower(), na=False)]
     if team:
@@ -70,16 +72,51 @@ def _filter(
     return df
 
 
+def filter_unified_sql(
+    *,
+    player: str | None = None,
+    team: str | None = None,
+    league: str | None = None,
+    season: str | None = None,
+    position: str | None = None,
+    min_minutes: int | None = None,
+    limit: int | None = None,
+) -> pd.DataFrame:
+    """Load filtered rows from ``unified_prepared`` via DuckDB."""
+    clauses: list[str] = ["1=1"]
+    params: list[Any] = []
+    if player:
+        clauses.append("_player_lower LIKE ?")
+        params.append(f"%{player.lower()}%")
+    if team:
+        clauses.append("_team_lower LIKE ?")
+        params.append(f"%{team.lower()}%")
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    if position:
+        clauses.append("lower(CAST(pos AS VARCHAR)) LIKE ?")
+        params.append(f"%{position.lower()}%")
+    if min_minutes:
+        clauses.append("COALESCE(minutes_computed, 0) >= ?")
+        params.append(float(min_minutes))
+    sql = f"SELECT * FROM unified_prepared WHERE {' AND '.join(clauses)}"
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    return db.query(sql, params)
+
+
 def _latest_clubelo_global_df() -> pd.DataFrame:
     be = get_backend()
     names = be.list_raw_glob("clubelo__global__*.parquet")
     if not names:
         return pd.DataFrame()
-    last = sorted(names)[-1]
-    try:
-        return be.read_parquet_rel(f"raw/{last}")
-    except Exception:
+    if db.table_empty("clubelo_global"):
         return pd.DataFrame()
+    return db.query("SELECT * FROM clubelo_global")
 
 
 def _clubelo_team_context(team_name: str | None) -> dict | None:
@@ -131,19 +168,27 @@ def _resolve_sofascore_match_id(
     league: str | None = None,
     season: str | None = None,
 ) -> int | None:
-    """Find SofaScore match_id from team names using sofascore_match_team_stats parquets."""
-    dfp = load_parquets("sofascore_match_team_stats__*.parquet")
-    if dfp.empty or "match_id" not in dfp.columns:
+    """Find SofaScore match_id from team names using DuckDB match_index / team stats."""
+    if db.table_empty("sofascore_match_team_stats"):
         return None
-    sub = dfp
-    if "period" in sub.columns:
-        sub = sub[sub["period"].astype(str).str.upper() == "ALL"]
-    if league and "league" in sub.columns:
-        sub = sub[sub["league"].astype(str).str.contains(league, case=False, na=False)]
-    if season and "season" in sub.columns:
-        sub = sub[sub["season"].astype(str) == str(season)]
+
+    clauses = ["upper(CAST(period AS VARCHAR)) = 'ALL'"]
+    params: list[Any] = []
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    sql = f"""
+        SELECT DISTINCT match_id, home_team, away_team
+        FROM sofascore_match_team_stats
+        WHERE {' AND '.join(clauses)}
+    """
+    sub = db.query(sql, params)
     if sub.empty:
         return None
+
     try:
         from rapidfuzz import fuzz
 

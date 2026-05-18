@@ -13,15 +13,21 @@ from soccer_server.cache import DataCache, get_unified
 from soccer_server.registry import TOOLS
 from soccer_server.tools import (
     tool_compare_players,
+    tool_compare_teams,
     tool_data_status,
     tool_find_similar_players,
     tool_get_club_elo,
     tool_get_league_table,
     tool_get_match,
     tool_get_player,
+    tool_get_player_form,
     tool_get_player_history,
+    tool_get_player_match_log,
+    tool_get_player_shot_map,
     tool_get_sofascore_match,
+    tool_get_team_stats,
     tool_scout_position,
+    tool_search_matches,
 )
 
 __all__ = [
@@ -38,4 +44,10 @@ __all__ = [
     "tool_get_club_elo",
     "tool_get_player_history",
     "tool_data_status",
+    "tool_get_player_match_log",
+    "tool_get_player_form",
+    "tool_get_team_stats",
+    "tool_compare_teams",
+    "tool_search_matches",
+    "tool_get_player_shot_map",
 ]

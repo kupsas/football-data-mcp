@@ -429,4 +429,12 @@ def build_unified(export_csv: bool = False):
     # ── Layer 4: Financial data (Transfermarkt + Capology) ───────────────────
     unified = merge_financial_data(unified)
 
-    return _finalize_and_save(unified, export_csv=export_csv)
+    result = _finalize_and_save(unified, export_csv=export_csv)
+    try:
+        from soccer_server import db
+
+        db.refresh()
+        log.info("DuckDB views refreshed after unified build")
+    except Exception as e:
+        log.warning("Could not refresh DuckDB views after build: %s", e)
+    return result
