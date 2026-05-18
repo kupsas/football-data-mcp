@@ -5,7 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from collect_data.storage import freshness_summary, get_backend, load_parquets, manifest_summary
+from collect_data.storage import freshness_summary, get_backend, manifest_summary
+from soccer_server import db
 from soccer_server.cache import get_unified
 from soccer_server.data_loading import (
     _clubelo_team_context,
@@ -393,51 +394,36 @@ def tool_get_match(args: dict) -> dict:
 
     mid = int(match_id)
     result: dict = {"match_id": mid}
-    be = get_backend()
 
-    for fname in sorted(be.list_raw_glob("understat_match_info__*.parquet")):
-        try:
-            info_df = be.read_parquet_rel(f"raw/{fname}")
-            row = info_df[info_df["match_id"] == mid]
-            if not row.empty:
-                result["match_info"] = _row_to_dict(row.iloc[0])
-                break
-        except Exception:
-            pass
+    if not db.table_empty("understat_match_info"):
+        info_df = db.query(
+            "SELECT * FROM understat_match_info WHERE match_id = ?",
+            [mid],
+        )
+        if not info_df.empty:
+            result["match_info"] = _row_to_dict(info_df.iloc[0])
 
     if include in ("shots", "both"):
-        shots_frames = []
-        for fname in sorted(be.list_raw_glob("understat_match_shots__*.parquet")):
-            try:
-                df = be.read_parquet_rel(f"raw/{fname}")
-                mask = df["match_id"] == mid
-                if mask.any():
-                    shots_frames.append(df[mask])
-            except Exception:
-                pass
-        if shots_frames:
-            shots_df = pd.concat(shots_frames, ignore_index=True)
+        if db.table_empty("understat_match_shots"):
+            result["shots"] = []
+        else:
+            shots_df = db.query(
+                "SELECT * FROM understat_match_shots WHERE match_id = ?",
+                [mid],
+            )
             result["shots"] = [_row_to_dict(r) for _, r in shots_df.iterrows()]
             result["shots_count"] = len(shots_df)
-        else:
-            result["shots"] = []
 
     if include in ("rosters", "both"):
-        roster_frames = []
-        for fname in sorted(be.list_raw_glob("understat_rosters__*.parquet")):
-            try:
-                df = be.read_parquet_rel(f"raw/{fname}")
-                mask = df["match_id"] == mid
-                if mask.any():
-                    roster_frames.append(df[mask])
-            except Exception:
-                pass
-        if roster_frames:
-            rosters_df = pd.concat(roster_frames, ignore_index=True)
+        if db.table_empty("understat_rosters"):
+            result["rosters"] = []
+        else:
+            rosters_df = db.query(
+                "SELECT * FROM understat_rosters WHERE match_id = ?",
+                [mid],
+            )
             result["rosters"] = [_row_to_dict(r) for _, r in rosters_df.iterrows()]
             result["roster_count"] = len(rosters_df)
-        else:
-            result["rosters"] = []
 
     if not result.get("match_info") and not result.get("shots") and not result.get("rosters"):
         return missing_source_error(
@@ -476,9 +462,11 @@ def tool_get_sofascore_match(args: dict) -> dict:
 
     out: dict = {"match_id": mid, "lookup_method": lookup_method}
 
-    team_df = load_parquets("sofascore_match_team_stats__*.parquet")
-    if not team_df.empty and "match_id" in team_df.columns:
-        trows = team_df[team_df["match_id"] == mid]
+    if not db.table_empty("sofascore_match_team_stats"):
+        trows = db.query(
+            "SELECT * FROM sofascore_match_team_stats WHERE match_id = ?",
+            [mid],
+        )
         if not trows.empty:
             prow = trows[trows["period"].astype(str).str.upper() == period]
             if prow.empty:
@@ -494,49 +482,73 @@ def tool_get_sofascore_match(args: dict) -> dict:
     any_rows = False
 
     if want_all or include == "shots":
-        sdf = load_parquets("sofascore_match_shots__*.parquet")
-        if not sdf.empty and "match_id" in sdf.columns:
-            sh = sdf[sdf["match_id"] == mid]
-            out["shots_count"] = len(sh)
-            out["shots"] = [_row_to_dict(r) for _, r in sh.head(limit).iterrows()]
-            if len(out["shots"]) > 0:
-                any_rows = True
-        else:
+        if db.table_empty("sofascore_match_shots"):
             out["shots"] = []
             out["shots_count"] = 0
+        else:
+            sh = db.query(
+                "SELECT * FROM sofascore_match_shots WHERE match_id = ? LIMIT ?",
+                [mid, limit],
+            )
+            total = db.query_scalar(
+                "SELECT count(*) FROM sofascore_match_shots WHERE match_id = ?",
+                [mid],
+            )
+            out["shots_count"] = int(total or 0)
+            out["shots"] = [_row_to_dict(r) for _, r in sh.iterrows()]
+            if out["shots"]:
+                any_rows = True
 
     if want_all or include == "team_stats":
-        if team_df.empty:
+        if db.table_empty("sofascore_match_team_stats"):
             out["team_stats"] = []
         else:
-            tsub = team_df[team_df["match_id"] == mid]
-            if period != "ALL" and "period" in tsub.columns:
-                tsub = tsub[tsub["period"].astype(str).str.upper() == period]
+            if period != "ALL":
+                tsub = db.query(
+                    """
+                    SELECT * FROM sofascore_match_team_stats
+                    WHERE match_id = ? AND upper(CAST(period AS VARCHAR)) = ?
+                    """,
+                    [mid, period],
+                )
+            else:
+                tsub = db.query(
+                    "SELECT * FROM sofascore_match_team_stats WHERE match_id = ?",
+                    [mid],
+                )
             out["team_stats"] = [_row_to_dict(r) for _, r in tsub.iterrows()]
-            if len(out["team_stats"]) > 0:
+            if out["team_stats"]:
                 any_rows = True
 
     if want_all or include == "player_stats":
-        pdf = load_parquets("sofascore_match_player_stats__*.parquet")
-        if not pdf.empty and "match_id" in pdf.columns:
-            ps = pdf[pdf["match_id"] == mid]
-            out["player_stats_count"] = len(ps)
-            out["player_stats"] = [_row_to_dict(r) for _, r in ps.head(limit).iterrows()]
-            if len(out["player_stats"]) > 0:
-                any_rows = True
-        else:
+        if db.table_empty("sofascore_match_player_stats"):
             out["player_stats"] = []
             out["player_stats_count"] = 0
+        else:
+            ps = db.query(
+                "SELECT * FROM sofascore_match_player_stats WHERE match_id = ? LIMIT ?",
+                [mid, limit],
+            )
+            total = db.query_scalar(
+                "SELECT count(*) FROM sofascore_match_player_stats WHERE match_id = ?",
+                [mid],
+            )
+            out["player_stats_count"] = int(total or 0)
+            out["player_stats"] = [_row_to_dict(r) for _, r in ps.iterrows()]
+            if out["player_stats"]:
+                any_rows = True
 
     if want_all or include == "momentum":
-        mdf = load_parquets("sofascore_match_momentum__*.parquet")
-        if not mdf.empty and "match_id" in mdf.columns:
-            mm = mdf[mdf["match_id"] == mid]
-            out["momentum"] = [_row_to_dict(r) for _, r in mm.iterrows()]
-            if len(out["momentum"]) > 0:
-                any_rows = True
-        else:
+        if db.table_empty("sofascore_match_momentum"):
             out["momentum"] = []
+        else:
+            mm = db.query(
+                "SELECT * FROM sofascore_match_momentum WHERE match_id = ?",
+                [mid],
+            )
+            out["momentum"] = [_row_to_dict(r) for _, r in mm.iterrows()]
+            if out["momentum"]:
+                any_rows = True
 
     if not any_rows:
         return missing_source_error(
@@ -562,18 +574,19 @@ def tool_get_club_elo(args: dict) -> dict:
 
     out: dict = {"team_query": team, **ctx}
     be = get_backend()
-    fix_names = be.list_raw_glob("clubelo__fixtures__*.parquet")
-    if fix_names:
+    if not db.table_empty("clubelo_fixtures"):
         try:
-            fname = sorted(fix_names)[-1]
-            fdf = be.read_parquet_rel(f"raw/{fname}")
-            tlow = team.lower()
-            mask = fdf["home_team"].astype(str).str.lower().str.contains(tlow, na=False) | fdf[
-                "away_team"
-            ].astype(str).str.lower().str.contains(tlow, na=False)
-            hits = fdf[mask].head(15)
+            tlow = f"%{team.lower()}%"
+            hits = db.query(
+                """
+                SELECT * FROM clubelo_fixtures
+                WHERE lower(CAST(home_team AS VARCHAR)) LIKE ?
+                   OR lower(CAST(away_team AS VARCHAR)) LIKE ?
+                LIMIT 15
+                """,
+                [tlow, tlow],
+            )
             out["upcoming_fixtures_sample"] = [_row_to_dict(r) for _, r in hits.iterrows()]
-            out["fixtures_file"] = fname
         except Exception as e:
             out["fixtures_error"] = str(e)
 
@@ -595,32 +608,45 @@ def tool_get_player_history(args: dict) -> dict:
         return invalid_param_value_error("type must be 'form', 'value', or 'transfers'")
 
     if history_type == "form":
-        rosters = load_parquets("understat_rosters__*.parquet")
-        if rosters.empty:
+        if db.table_empty("understat_rosters"):
             return missing_source_error(
                 "Understat roster (match-level) data",
                 "python -m collect_data --understat-matches-only",
             )
 
-        mask = rosters["player"].astype(str).str.lower().str.contains(name.lower(), na=False)
-        player_rows = rosters[mask]
+        base_clauses = ["lower(CAST(player AS VARCHAR)) LIKE ?"]
+        params: list = [f"%{name.lower()}%"]
         if season:
-            player_rows = player_rows[player_rows["season"] == season]
+            base_clauses.append("season = ?")
+            params.append(season)
         if league:
-            player_rows = player_rows[player_rows["league"].str.contains(league, case=False, na=False)]
-
+            base_clauses.append("lower(league) LIKE ?")
+            params.append(f"%{league.lower()}%")
+        where_base = " AND ".join(base_clauses)
+        if db.table_empty("understat_match_info"):
+            player_rows = db.query(
+                f"SELECT * FROM understat_rosters WHERE {where_base}",
+                params,
+            )
+        else:
+            alias_clauses = [
+                c.replace("player", "r.player")
+                .replace("season", "r.season")
+                .replace("league", "r.league")
+                for c in base_clauses
+            ]
+            where_alias = " AND ".join(alias_clauses)
+            player_rows = db.query(
+                f"""
+                SELECT r.*, i.home_team, i.away_team, i.datetime, i.home_goals, i.away_goals
+                FROM understat_rosters r
+                LEFT JOIN understat_match_info i ON r.match_id = i.match_id
+                WHERE {where_alias}
+                """,
+                params,
+            )
         if player_rows.empty:
             return not_found_error("match-level rows for player", name)
-
-        match_info = load_parquets("understat_match_info__*.parquet")
-        if not match_info.empty:
-            player_rows = player_rows.merge(
-                match_info[
-                    ["match_id", "home_team", "away_team", "datetime", "home_goals", "away_goals"]
-                ],
-                on="match_id",
-                how="left",
-            )
 
         return {
             "player": name,
@@ -639,7 +665,10 @@ def tool_get_player_history(args: dict) -> dict:
                 tm_id = str(val).strip()
 
     if history_type == "value":
-        mv_df = load_parquets("transfermarkt_mv_history__*.parquet")
+        if db.table_empty("transfermarkt_mv_history"):
+            mv_df = pd.DataFrame()
+        else:
+            mv_df = db.query("SELECT * FROM transfermarkt_mv_history")
         if mv_df.empty:
             return missing_source_error(
                 "Transfermarkt market value history",
@@ -649,7 +678,10 @@ def tool_get_player_history(args: dict) -> dict:
         if tm_id:
             rows = mv_df[mv_df["tm_id"].astype(str) == tm_id]
         else:
-            tm_flat = load_parquets("transfermarkt__*.parquet")
+            if db.table_empty("transfermarkt_profiles"):
+                tm_flat = pd.DataFrame()
+            else:
+                tm_flat = db.query("SELECT * FROM transfermarkt_profiles")
             if not tm_flat.empty:
                 match = tm_flat[
                     tm_flat["tm_name"].astype(str).str.lower().str.contains(name.lower(), na=False)
@@ -675,7 +707,10 @@ def tool_get_player_history(args: dict) -> dict:
             "history": [_row_to_dict(r) for _, r in rows.sort_values("date").head(limit).iterrows()],
         }
 
-    tr_df = load_parquets("transfermarkt_transfers__*.parquet")
+    if db.table_empty("transfermarkt_transfers"):
+        tr_df = pd.DataFrame()
+    else:
+        tr_df = db.query("SELECT * FROM transfermarkt_transfers")
     if tr_df.empty:
         return missing_source_error(
             "Transfermarkt transfer history",
@@ -696,6 +731,21 @@ def tool_get_player_history(args: dict) -> dict:
         "type": "transfers",
         "transfers": [_row_to_dict(r) for _, r in rows.drop_duplicates().head(limit).iterrows()],
     }
+
+
+def _coverage_pct(series: pd.Series) -> int:
+    """Return 0–100 coverage for one key_stat column within a season slice."""
+    n = len(series)
+    if n == 0:
+        return 0
+    if (
+        series.dtype == object
+        or pd.api.types.is_string_dtype(series.dtype)
+        or not pd.api.types.is_numeric_dtype(series.dtype)
+    ):
+        return int(100 * series.notna().sum() / n)
+    numeric = pd.to_numeric(series, errors="coerce")
+    return int(100 * (numeric.fillna(0) > 0).sum() / n)
 
 
 def tool_data_status(args: dict) -> dict:
@@ -772,12 +822,337 @@ def tool_data_status(args: dict) -> dict:
             cov: dict = {"players": len(s)}
             for stat in key_stats:
                 if stat in s.columns:
-                    if s[stat].dtype == object:
-                        pct = int(100 * s[stat].notna().sum() / len(s))
-                    else:
-                        pct = int(100 * (s[stat].fillna(0) > 0).sum() / len(s))
-                    cov[stat] = f"{pct}%"
+                    cov[stat] = f"{_coverage_pct(s[stat])}%"
             coverage[season] = cov
     status["coverage"] = coverage
+    status["query_engine"] = "duckdb"
+    status["analytics_views"] = {
+        name: int(db.query_scalar(f"SELECT count(*) FROM {name}") or 0)
+        for name in (
+            "player_match_log",
+            "player_form_profile",
+            "team_season_stats",
+            "player_shot_profile",
+            "match_index",
+        )
+    }
 
     return status
+
+
+def tool_get_player_match_log(args: dict) -> dict:
+    """Per-match SofaScore stats for one player (from player_match_log view)."""
+    name = args.get("name", "")
+    if not name:
+        return missing_param_error("name")
+    season = args.get("season")
+    league = args.get("league")
+    team = args.get("team")
+    limit = int(args.get("limit", 20))
+    home_only = args.get("home_only")
+    away_only = args.get("away_only")
+
+    if db.table_empty("player_match_log"):
+        return missing_source_error(
+            "SofaScore match-level player data",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    clauses = ["lower(player_name) LIKE ?"]
+    params: list[Any] = [f"%{name.lower()}%"]
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    if team:
+        clauses.append("lower(team) LIKE ?")
+        params.append(f"%{team.lower()}%")
+    if home_only:
+        clauses.append("is_home = true")
+    if away_only:
+        clauses.append("COALESCE(is_home, false) = false")
+
+    rows = db.query(
+        f"""
+        SELECT * FROM player_match_log
+        WHERE {' AND '.join(clauses)}
+        ORDER BY match_id DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    if rows.empty:
+        return not_found_error("match log for player", name)
+
+    return {
+        "player": name,
+        "matches_returned": len(rows),
+        "match_log": [_row_to_dict(r) for _, r in rows.iterrows()],
+    }
+
+
+def tool_get_player_form(args: dict) -> dict:
+    """Aggregated form metrics from match-level SofaScore ratings."""
+    name = args.get("name", "")
+    if not name:
+        return missing_param_error("name")
+    season = args.get("season")
+    league = args.get("league")
+    team = args.get("team")
+    limit = int(args.get("limit", 10))
+
+    if db.table_empty("player_form_profile"):
+        return missing_source_error(
+            "Player form aggregates (requires SofaScore match player stats)",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    clauses = ["lower(player_name) LIKE ?"]
+    params: list[Any] = [f"%{name.lower()}%"]
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    if team:
+        clauses.append("lower(team) LIKE ?")
+        params.append(f"%{team.lower()}%")
+
+    rows = db.query(
+        f"""
+        SELECT * FROM player_form_profile
+        WHERE {' AND '.join(clauses)}
+        ORDER BY season DESC, matches_played DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    if rows.empty:
+        return not_found_error("form profile for player", name)
+
+    # Last N match ratings for trend
+    last_matches = pd.DataFrame()
+    if not db.table_empty("player_match_log"):
+        last_matches = db.query(
+            f"""
+            SELECT match_id, rating, goals, assists, xg, opponent, is_home, team
+            FROM player_match_log
+            WHERE {' AND '.join(clauses)}
+              AND rating IS NOT NULL AND rating > 0
+            ORDER BY match_id DESC
+            LIMIT 5
+            """,
+            params,
+        )
+
+    out: dict = {
+        "player": name,
+        "profiles": [_row_to_dict(r) for _, r in rows.iterrows()],
+    }
+    if not last_matches.empty:
+        out["last_5_matches"] = [_row_to_dict(r) for _, r in last_matches.iterrows()]
+        out["last_5_avg_rating"] = round(float(last_matches["rating"].mean()), 3)
+    return out
+
+
+def tool_get_team_stats(args: dict) -> dict:
+    """Aggregated team season stats from SofaScore match team data."""
+    team = args.get("team", "")
+    if not team:
+        return missing_param_error("team")
+    season = args.get("season")
+    league = args.get("league")
+    limit = int(args.get("limit", 5))
+
+    if db.table_empty("team_season_stats"):
+        return missing_source_error(
+            "Team season aggregates (SofaScore match team stats)",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    clauses = ["lower(team) LIKE ?"]
+    params: list[Any] = [f"%{team.lower()}%"]
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+
+    rows = db.query(
+        f"""
+        SELECT * FROM team_season_stats
+        WHERE {' AND '.join(clauses)}
+        ORDER BY season DESC, matches DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    if rows.empty:
+        return not_found_error("team stats for", team)
+
+    # Attach ClubElo context when available
+    result: dict = {
+        "team_query": team,
+        "stats": [_row_to_dict(r) for _, r in rows.iterrows()],
+    }
+    ce = _clubelo_team_context(team)
+    if ce:
+        result["clubelo"] = ce
+    return result
+
+
+def tool_compare_teams(args: dict) -> dict:
+    """Side-by-side team season aggregates for two or more clubs."""
+    names = args.get("names", [])
+    if not names or len(names) < 2:
+        return missing_param_error("names (list of at least 2 team names)")
+    season = args.get("season")
+    league = args.get("league")
+
+    if db.table_empty("team_season_stats"):
+        return missing_source_error(
+            "Team season aggregates",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    comparisons = []
+    for team_name in names:
+        clauses = ["lower(team) LIKE ?"]
+        params: list[Any] = [f"%{str(team_name).lower()}%"]
+        if season:
+            clauses.append("season = ?")
+            params.append(season)
+        if league:
+            clauses.append("lower(league) LIKE ?")
+            params.append(f"%{league.lower()}%")
+        hit = db.query(
+            f"""
+            SELECT * FROM team_season_stats
+            WHERE {' AND '.join(clauses)}
+            ORDER BY season DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        if hit.empty:
+            comparisons.append({"team": team_name, **not_found_error("team", team_name)})
+        else:
+            row = hit.iloc[0]
+            d = _row_to_dict(row)
+            d["team_query"] = team_name
+            comparisons.append(d)
+
+    return {"comparisons": comparisons}
+
+
+def tool_search_matches(args: dict) -> dict:
+    """Search SofaScore matches by team, league, season; optional sort by total xG."""
+    team = args.get("team")
+    league = args.get("league")
+    season = args.get("season")
+    limit = int(args.get("limit", 20))
+    sort_by = (args.get("sort_by") or "xg_total").lower()
+
+    if db.table_empty("match_index"):
+        return missing_source_error(
+            "Match index (SofaScore team stats)",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    clauses = ["1=1"]
+    params: list[Any] = []
+    if team:
+        t = f"%{team.lower()}%"
+        clauses.append("(lower(home_team) LIKE ? OR lower(away_team) LIKE ?)")
+        params.extend([t, t])
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+
+    order = "xg_home + xg_away DESC"
+    if sort_by == "shots":
+        order = "shots_home + shots_away DESC"
+    elif sort_by == "possession":
+        order = "GREATEST(possession_home, possession_away) DESC"
+
+    rows = db.query(
+        f"""
+        SELECT *,
+               COALESCE(xg_home, 0) + COALESCE(xg_away, 0) AS xg_total
+        FROM match_index
+        WHERE {' AND '.join(clauses)}
+        ORDER BY {order}
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+
+    return {
+        "count": len(rows),
+        "matches": [_row_to_dict(r) for _, r in rows.iterrows()],
+    }
+
+
+def tool_get_player_shot_map(args: dict) -> dict:
+    """Shot locations and metadata for a player (SofaScore match shots)."""
+    name = args.get("name", "")
+    if not name:
+        return missing_param_error("name")
+    season = args.get("season")
+    league = args.get("league")
+    limit = int(args.get("limit", 100))
+
+    if db.table_empty("sofascore_match_shots"):
+        return missing_source_error(
+            "SofaScore shot map data",
+            "python -m collect_data --sofascore-matches-only",
+        )
+
+    clauses = ["lower(player_name) LIKE ?"]
+    params: list[Any] = [f"%{name.lower()}%"]
+    if season:
+        clauses.append("season = ?")
+        params.append(season)
+    if league:
+        clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+
+    shots = db.query(
+        f"""
+        SELECT match_id, player_name, minute, shot_type, situation, body_part,
+               xg, xgot, player_x, player_y, goal_mouth_x, goal_mouth_y, league, season
+        FROM sofascore_match_shots
+        WHERE {' AND '.join(clauses)}
+        ORDER BY match_id DESC, minute DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    if shots.empty:
+        return not_found_error("shots for player", name)
+
+    profile = pd.DataFrame()
+    if not db.table_empty("player_shot_profile"):
+        profile = db.query(
+            f"""
+            SELECT * FROM player_shot_profile
+            WHERE {' AND '.join(clauses)}
+            ORDER BY season DESC
+            LIMIT 3
+            """,
+            params,
+        )
+
+    return {
+        "player": name,
+        "shots_returned": len(shots),
+        "shots": [_row_to_dict(r) for _, r in shots.iterrows()],
+        "season_profile": [_row_to_dict(r) for _, r in profile.iterrows()] if not profile.empty else [],
+    }

@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 
+from soccer_server import db
 from soccer_server.cache import get_unified
 from soccer_server.registry import TOOLS
 
@@ -63,7 +64,7 @@ def handle_request(req: dict):
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "soccer-data", "version": "3.1"},
+                "serverInfo": {"name": "soccer-data", "version": "3.2"},
             },
         )
 
@@ -105,7 +106,8 @@ def handle_request(req: dict):
 
 
 def main():
-    get_unified()  # Warm unified table cache once at startup (same as legacy server).
+    db.init_db()  # Register parquet views and aggregate analytics views.
+    get_unified()  # Warm unified table cache once at startup.
     for line in sys.stdin:
         line = line.strip()
         if not line:

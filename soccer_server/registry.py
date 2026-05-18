@@ -4,15 +4,21 @@ from __future__ import annotations
 
 from soccer_server.tools import (
     tool_compare_players,
+    tool_compare_teams,
     tool_data_status,
     tool_find_similar_players,
     tool_get_club_elo,
     tool_get_league_table,
     tool_get_match,
     tool_get_player,
+    tool_get_player_form,
     tool_get_player_history,
+    tool_get_player_match_log,
+    tool_get_player_shot_map,
     tool_get_sofascore_match,
+    tool_get_team_stats,
     tool_scout_position,
+    tool_search_matches,
 )
 
 TOOLS = {
@@ -224,9 +230,122 @@ TOOLS = {
         "description": (
             "Check what data is available — leagues, seasons, per-season coverage percentages "
             "for key stats, counts of supplementary parquet files, manifest build timestamps "
-            "(last_built_at, oldest_source_fetched_at), and raw .freshness.json age."
+            "(last_built_at, oldest_source_fetched_at), raw .freshness.json age, and DuckDB "
+            "analytics view row counts."
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_data_status,
+    },
+    "get_player_match_log": {
+        "description": (
+            "Per-match SofaScore stats for a player: rating, xG, xGoT, xA, goals, assists, "
+            "shots, passes, opponent, home/away. Requires SofaScore match collection."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Player name (partial match)"},
+                "season": {"type": "string"},
+                "league": {"type": "string"},
+                "team": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max matches (default 20)"},
+                "home_only": {"type": "boolean"},
+                "away_only": {"type": "boolean"},
+            },
+            "required": ["name"],
+        },
+        "fn": tool_get_player_match_log,
+    },
+    "get_player_form": {
+        "description": (
+            "Aggregated form from match-level ratings: avg rating, consistency (std dev), "
+            "home/away splits, matches rated 7+, plus last 5 match ratings when available."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "season": {"type": "string"},
+                "league": {"type": "string"},
+                "team": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max season profiles (default 10)"},
+            },
+            "required": ["name"],
+        },
+        "fn": tool_get_player_form,
+    },
+    "get_team_stats": {
+        "description": (
+            "Team season aggregates from SofaScore matches: avg xG for/against, possession, "
+            "shots, big chances, home/away xG splits. Optional ClubElo context."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "team": {"type": "string", "description": "Club name (partial match)"},
+                "season": {"type": "string"},
+                "league": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max rows (default 5)"},
+            },
+            "required": ["team"],
+        },
+        "fn": tool_get_team_stats,
+    },
+    "compare_teams": {
+        "description": (
+            "Compare two or more teams side-by-side on season aggregates (xG, possession, shots)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Team names (at least 2)",
+                },
+                "season": {"type": "string"},
+                "league": {"type": "string"},
+            },
+            "required": ["names"],
+        },
+        "fn": tool_compare_teams,
+    },
+    "search_matches": {
+        "description": (
+            "Search SofaScore matches by team (home or away), league, season. "
+            "sort_by: xg_total (default), shots, or possession."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "team": {"type": "string", "description": "Filter matches involving this team"},
+                "league": {"type": "string"},
+                "season": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max results (default 20)"},
+                "sort_by": {
+                    "type": "string",
+                    "description": "xg_total | shots | possession",
+                },
+            },
+            "required": [],
+        },
+        "fn": tool_search_matches,
+    },
+    "get_player_shot_map": {
+        "description": (
+            "Shot-level data for a player: coordinates, xG, body part, situation, plus "
+            "season shot profile aggregates when available."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "season": {"type": "string"},
+                "league": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max shot rows (default 100)"},
+            },
+            "required": ["name"],
+        },
+        "fn": tool_get_player_shot_map,
     },
 }

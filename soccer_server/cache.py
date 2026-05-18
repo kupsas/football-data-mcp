@@ -1,4 +1,4 @@
-"""In-memory cache for the unified player table with optional TTL (for hosted deployments)."""
+"""Cached access to the unified player table via DuckDB."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 import pandas as pd
 
-from collect_data.storage import StorageBackend, get_backend
+from soccer_server import db
 from soccer_server.data_loading import _parse_age
 
 log = logging.getLogger(__name__)
@@ -15,25 +15,16 @@ log = logging.getLogger(__name__)
 
 class DataCache:
     """
-    Cached unified ``unified_player_stats`` table.
+    Cached ``unified_prepared`` view from DuckDB.
 
-    With ``ttl_seconds=None`` (default), the first load is kept for the process lifetime
-    (same behaviour as the original global ``_df``). With a TTL, the frame is re-read from
-    the active :class:`~collect_data.storage.StorageBackend` when stale.
+    With ``ttl_seconds=None`` (default), the first load is kept for the process lifetime.
+    With a TTL, the frame is re-read when stale (calls ``db.refresh()`` first).
     """
 
-    def __init__(
-        self,
-        backend: StorageBackend | None = None,
-        ttl_seconds: int | None = None,
-    ) -> None:
-        self._backend = backend
+    def __init__(self, ttl_seconds: int | None = None) -> None:
         self._ttl = ttl_seconds
         self._df: pd.DataFrame | None = None
         self._loaded_at: float = 0.0
-
-    def _be(self) -> StorageBackend:
-        return self._backend if self._backend is not None else get_backend()
 
     def invalidate(self) -> None:
         """Force the next ``get_unified`` to reload from storage."""
@@ -48,50 +39,59 @@ class DataCache:
     def get_unified(self) -> pd.DataFrame:
         if self._df is not None and not self._is_stale():
             return self._df
+        if self._is_stale():
+            db.refresh()
+        else:
+            db.init_db()
         self._df = self._load_and_prepare()
         self._loaded_at = time.time()
         return self._df
 
     def _load_and_prepare(self) -> pd.DataFrame:
-        be = self._be()
-        if be.exists_rel("unified_player_stats.parquet"):
-            df = be.read_parquet_rel("unified_player_stats.parquet")
-        elif be.exists_rel("unified_player_stats.csv"):
-            df = be.read_csv_rel("unified_player_stats.csv", low_memory=False)
-        else:
+        df = db.query("SELECT * FROM unified_prepared").copy()
+        if df.empty:
             log.warning(
-                "No unified table found (unified_player_stats.parquet or .csv) — "
-                "run ``python -m collect_data`` first."
+                "No unified table found — run ``python -m collect_data`` first."
             )
             return pd.DataFrame()
 
         id_cols = {
-            "player", "nation", "pos", "team", "league", "season",
-            "player_id", "team_id", "understat_id", "tm_id",
-            "nationality", "citizenship", "tm_position",
-            "contract_expiration", "dob",
+            "player",
+            "nation",
+            "pos",
+            "team",
+            "league",
+            "season",
+            "player_id",
+            "team_id",
+            "understat_id",
+            "tm_id",
+            "nationality",
+            "citizenship",
+            "tm_position",
+            "contract_expiration",
+            "dob",
+            "_player_lower",
+            "_team_lower",
         }
         for col in df.columns:
             if col not in id_cols:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        df["_player_lower"] = df["player"].astype(str).str.lower()
-        df["_team_lower"] = df["team"].astype(str).str.lower()
+        if "minutes" not in df.columns and "minutes_computed" in df.columns:
+            df["minutes"] = df["minutes_computed"]
 
         if "age" in df.columns:
             df["age_num"] = df["age"].apply(_parse_age)
         else:
             df["age_num"] = float("nan")
 
-        if "minutes" not in df.columns and "ninety_s" in df.columns:
-            df["minutes"] = df["ninety_s"] * 90
-
         log.info(
             "Loaded %s rows × %s cols | %s leagues | %s seasons",
             len(df),
             len(df.columns),
-            df["league"].nunique(),
-            df["season"].nunique(),
+            df["league"].nunique() if "league" in df.columns else 0,
+            df["season"].nunique() if "season" in df.columns else 0,
         )
         return df
 
