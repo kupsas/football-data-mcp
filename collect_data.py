@@ -1113,6 +1113,36 @@ def _ckpt_flush(
         log.warning(f"  ⚠️  Checkpoint flush failed: {exc}")
 
 
+def _sofascore_match_pack_fully_done(
+    force: bool,
+    p_shots: Path,
+    p_team: Path,
+    p_play: Path,
+    p_mom: Path,
+    p_ckpt: Path,
+) -> bool:
+    """
+    Return True only when a league-season SofaScore match job can be skipped.
+
+    Checkpoint flushes write all four parquet files every FLUSH_EVERY matches, so
+    "all four exist" does **not** mean the season is finished — an in-progress run
+    always has ``sofascore_match_checkpoint__*.json`` alongside those files until
+    the worker removes it after the final save.
+    """
+    if force:
+        return False
+    if not (
+        p_shots.exists()
+        and p_team.exists()
+        and p_play.exists()
+        and p_mom.exists()
+    ):
+        return False
+    if p_ckpt.exists():
+        return False
+    return True
+
+
 def _discover_sofascore_match_jobs(
     leagues: list[str] | None,
     seasons: list[str] | None,
@@ -1122,7 +1152,8 @@ def _discover_sofascore_match_jobs(
     """
     Build the list of (league, season, sleep_between_matches, force) tuples that
     still need scraping.  Skips unsupported leagues, unavailable seasons, and
-    league-seasons whose four parquet outputs already exist (unless force=True).
+    league-seasons that are fully finished (four parquets and no checkpoint),
+    unless force=True.
     """
     sys.path.insert(0, str(Path(__file__).parent / "src"))
     from ScraperFC import Sofascore
@@ -1163,7 +1194,8 @@ def _discover_sofascore_match_jobs(
             p_team = RAW_DIR / f"sofascore_match_team_stats__{slug}.parquet"
             p_play = RAW_DIR / f"sofascore_match_player_stats__{slug}.parquet"
             p_mom = RAW_DIR / f"sofascore_match_momentum__{slug}.parquet"
-            if not force and p_shots.exists() and p_team.exists() and p_play.exists() and p_mom.exists():
+            p_ckpt = RAW_DIR / f"sofascore_match_checkpoint__{slug}.json"
+            if _sofascore_match_pack_fully_done(force, p_shots, p_team, p_play, p_mom, p_ckpt):
                 log.info(f"⏭️  SofaScore match pack complete for {slug}")
                 continue
             jobs.append((league, season, sleep_between_matches, force))
@@ -1213,7 +1245,7 @@ def _sofascore_match_season_worker(
     p_mom = RAW_DIR / f"sofascore_match_momentum__{slug}.parquet"
     p_ckpt = RAW_DIR / f"sofascore_match_checkpoint__{slug}.json"
 
-    if not force and p_shots.exists() and p_team.exists() and p_play.exists() and p_mom.exists():
+    if _sofascore_match_pack_fully_done(force, p_shots, p_team, p_play, p_mom, p_ckpt):
         log.info(f"{pfx}  ⏭️  match pack already complete")
         return
 
@@ -1223,6 +1255,26 @@ def _sofascore_match_season_worker(
             done_ids = set(json.loads(p_ckpt.read_text()).get("done_ids", []))
         except Exception:
             pass
+    elif force:
+        # force=True does not load done_ids from disk, but the JSON file from an
+        # older run would otherwise sit untouched until the first %FLUSH_EVERY
+        # scrape — a Ctrl+C before then leaves a stale done_ids (e.g. 150) that
+        # the next non-force run would treat as real progress.  Reset the file
+        # immediately so it only ever reflects *this* scrape.
+        _ckpt_flush(
+            slug,
+            set(),
+            [],
+            [],
+            [],
+            [],
+            p_shots,
+            p_team,
+            p_play,
+            p_mom,
+            p_ckpt,
+        )
+        log.info(f"{pfx}  🔁 force-matches: checkpoint reset (was from any prior run)")
 
     def _load_partial(path: Path) -> pd.DataFrame:
         if path.exists() and done_ids:
@@ -1281,9 +1333,11 @@ def _sofascore_match_season_worker(
             away_team = away.get("name", "")
             home_id = int(home.get("id", 0))
 
+            # global_idx = position in SofaScore's finished list for the season (not
+            # "how many matches scraped this session").  idx counts this run's queue.
             global_idx = match_seq.get(mid, idx)
             log.info(
-                f"{pfx}  [{global_idx}/{len(finished)}] "
+                f"{pfx}  [season {global_idx}/{len(finished)} · this run {idx}/{len(remaining)}] "
                 f"{home_team} vs {away_team} (id={mid})"
             )
 
@@ -1333,7 +1387,10 @@ def _sofascore_match_season_worker(
             done_ids.add(mid)
             time.sleep(sleep_between_matches)
 
-            if idx % FLUSH_EVERY == 0:
+            # Always flush once after the first match of this segment so Ctrl+C
+            # cannot leave a checkpoint from a *previous* run (see force-matches
+            # reset above) or an empty on-disk state for tens of matches.
+            if idx == 1 or idx % FLUSH_EVERY == 0:
                 log.info(f"{pfx}  💾 checkpoint flush at {global_idx}/{len(finished)} …")
                 _ckpt_flush(
                     slug,
@@ -1377,8 +1434,9 @@ def collect_sofascore_matches(
 ) -> None:
     """
     Per-match SofaScore data: shot map, team stats (by half), player match stats, momentum.
-    Writes four parquet files per league+season. Skips a league+season if all four exist
-    unless force=True.
+    Writes four parquet files per league+season. Skips when all four exist **and** there is
+    no checkpoint file (in-progress runs flush all four periodically). Use force=True to
+    rebuild from scratch.
 
     parallel: if >1, run that many league-season jobs at once in separate processes
     (safe with Bright Data — each job writes different files; IPs rotate per request).
