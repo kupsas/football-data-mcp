@@ -77,7 +77,8 @@ Add this to your `claude_desktop_config.json`:
   "mcpServers": {
     "soccer-data": {
       "command": "python3",
-      "args": ["/path/to/football-data-mcp/soccer_server.py"]
+      "args": ["-m", "soccer_server"],
+      "cwd": "/path/to/football-data-mcp"
     }
   }
 }
@@ -86,7 +87,9 @@ Add this to your `claude_desktop_config.json`:
 On macOS the config file lives at:
 `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Restart Claude Desktop. The 8 tools will appear automatically.
+Restart Claude Desktop. The 10 tools will appear automatically.
+
+Optional: set ``MCP_STDIO_TOOL_HINTS=0`` in the server environment if you do not want extra ``_stdio_note`` lines on tool errors (HTTP wrappers typically ignore hints and use ``error`` / ``error_code`` only).
 
 ---
 
@@ -96,6 +99,13 @@ Raw files are stored in `data/raw/`. The merged player table is written to
 `data/unified_player_stats.parquet` (and optionally `data/unified_player_stats.csv`
 if you pass ``--export-csv``). The MCP server reads Parquet first and falls back
 to CSV for older installs.
+
+### Storage backends (local vs R2)
+
+- **Default:** ``DATA_BACKEND=local`` (or unset). All paths live under ``data/`` in the repo.
+- **Cloudflare R2:** set ``DATA_BACKEND=r2`` and install extras: ``pip install ".[r2]"``. Required
+  environment variables: ``R2_BUCKET``, ``R2_ENDPOINT_URL``, ``R2_ACCESS_KEY_ID``, ``R2_SECRET_ACCESS_KEY``.
+  Object keys mirror local layout (e.g. ``raw/foo.parquet``, ``unified_player_stats.parquet``).
 
 ---
 
@@ -125,12 +135,19 @@ football-data-mcp/
 ├── collect_data.py          # Compatibility CLI wrapper (runs ``python -m collect_data``)
 ├── collect_data/            # Pipeline package
 │   ├── config.py            # League lists, rename maps, seasons
-│   ├── storage.py           # Raw paths, save_raw, CheckpointTracker, freshness
+│   ├── storage.py           # Paths, StorageBackend, save_raw, CheckpointTracker, freshness
+│   ├── backends/            # ``local`` + ``r2`` implementations (``DATA_BACKEND``)
 │   ├── helpers.py           # Name normalisation, retries, season helpers
 │   ├── pipeline.py          # ``main()`` CLI (argparse + dispatch)
 │   ├── collectors/        # One module per source (fbref, understat, …)
 │   └── build/               # ``unified.py`` + ``financials.py`` merge layer
-├── soccer_server.py         # MCP server (8 tools)
+├── soccer_server/           # MCP server package (10 tools, stdio transport)
+│   ├── tools.py             # Tool implementations
+│   ├── registry.py          # ``TOOLS`` map (schemas + callables)
+│   ├── cache.py             # Unified-table cache (optional TTL for hosted use)
+│   ├── data_loading.py      # Filters + ClubElo / SofaScore helpers
+│   ├── transport_stdio.py   # JSON-RPC stdin/stdout loop
+│   └── __main__.py          # ``python -m soccer_server``
 ├── src/ScraperFC/           # ScraperFC scrapers (upstream: oseymour/ScraperFC)
 └── data/
     ├── unified_player_stats.parquet   # Main merged dataset (gitignored)
@@ -144,7 +161,7 @@ football-data-mcp/
 
 This project builds on [ScraperFC](https://github.com/oseymour/ScraperFC). Bug fixes to the underlying scrapers are contributed back upstream — if you find something broken in a scraper, consider opening an issue or PR there too.
 
-For issues specific to the pipeline (`collect_data` package / `collect_data.py` entry) or the MCP server (`soccer_server.py`), open an issue here.
+For issues specific to the pipeline (`collect_data` package / `collect_data.py` entry) or the MCP server (`soccer_server` package / ``python -m soccer_server``), open an issue here.
 
 ---
 

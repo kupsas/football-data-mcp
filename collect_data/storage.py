@@ -1,11 +1,13 @@
-"""Filesystem layout, raw parquet I/O, freshness sidecar, and SofaScore checkpoint writes."""
+"""Filesystem layout, storage backends, raw parquet I/O, and SofaScore checkpoint writes."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -17,26 +19,95 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# ── Canonical paths (single source of truth) ──────────────────────────────────
+
 DATA_DIR = repo_root() / "data"
 RAW_DIR = DATA_DIR / "raw"
-# Sidecar JSON: last fetch time per raw parquet (updated by save_raw).
 FRESHNESS_PATH = RAW_DIR / ".freshness.json"
+UNIFIED_PARQUET = DATA_DIR / "unified_player_stats.parquet"
+UNIFIED_CSV = DATA_DIR / "unified_player_stats.csv"
+MANIFEST_PATH = DATA_DIR / "manifest.json"
 
 
-def _update_freshness_record(name: str, row_count: int, path: Path) -> None:
+@runtime_checkable
+class StorageBackend(Protocol):
+    """Abstraction over local disk vs S3-compatible object storage (e.g. R2)."""
+
+    def read_parquet_rel(self, rel_path: str) -> pd.DataFrame:
+        """Read a Parquet file relative to ``DATA_DIR`` (e.g. ``raw/foo.parquet``)."""
+        ...
+
+    def read_csv_rel(self, rel_path: str, **kwargs) -> pd.DataFrame:
+        """Read a CSV file relative to ``DATA_DIR``."""
+        ...
+
+    def write_parquet_rel(self, rel_path: str, df: pd.DataFrame) -> str:
+        """Write a Parquet file; returns a URI or filesystem path for logging."""
+        ...
+
+    def write_csv_rel(self, rel_path: str, df: pd.DataFrame) -> str:
+        """Write a CSV file."""
+        ...
+
+    def write_json_rel(self, rel_path: str, data: dict) -> None:
+        """Write JSON (UTF-8)."""
+        ...
+
+    def read_json_rel(self, rel_path: str) -> dict:
+        """Read JSON object."""
+        ...
+
+    def exists_rel(self, rel_path: str) -> bool:
+        """Whether the object exists."""
+        ...
+
+    def list_raw_glob(self, pattern: str) -> list[str]:
+        """Sorted basenames under ``raw/`` matching the glob ``pattern``."""
+        ...
+
+
+_backend: StorageBackend | None = None
+
+
+def get_backend() -> StorageBackend:
+    """Active storage backend from ``DATA_BACKEND`` (``local`` default, ``r2`` for R2)."""
+    global _backend
+    if _backend is not None:
+        return _backend
+
+    mode = os.getenv("DATA_BACKEND", "local").lower().strip()
+    if mode == "r2":
+        from collect_data.backends.r2 import R2Backend
+
+        _backend = R2Backend()
+    else:
+        from collect_data.backends.local import LocalBackend
+
+        _backend = LocalBackend()
+    return _backend
+
+
+def reset_backend() -> None:
+    """Clear cached backend (for tests or after env change)."""
+    global _backend
+    _backend = None
+
+
+def _update_freshness_record(name: str, row_count: int, path: str) -> None:
     """Append/update fetch metadata for one raw dataset (best-effort, single-process safe)."""
     try:
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        if FRESHNESS_PATH.exists():
-            data = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+        be = get_backend()
+        rel = "raw/.freshness.json"
+        if be.exists_rel(rel):
+            data = be.read_json_rel(rel)
         else:
             data = {}
         data[name] = {
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "rows": int(row_count),
-            "path": str(path),
+            "path": path,
         }
-        FRESHNESS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        be.write_json_rel(rel, data)
     except Exception as e:
         log.warning(f"  Could not update freshness sidecar: {e}")
 
@@ -46,10 +117,12 @@ def raw_freshness_age_hours(dataset_name: str) -> float | None:
     Hours since ``save_raw`` last recorded this dataset in ``.freshness.json``.
     Returns None if unknown.
     """
-    if not FRESHNESS_PATH.exists():
+    be = get_backend()
+    rel = "raw/.freshness.json"
+    if not be.exists_rel(rel):
         return None
     try:
-        data = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+        data = be.read_json_rel(rel)
         meta = data.get(dataset_name) or {}
         ts = meta.get("fetched_at")
         if not ts:
@@ -62,13 +135,73 @@ def raw_freshness_age_hours(dataset_name: str) -> float | None:
 
 
 def save_raw(df: pd.DataFrame, name: str) -> Path:
-    """Save a DataFrame as data/raw/<name>.parquet."""
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    path = RAW_DIR / f"{name}.parquet"
-    df.to_parquet(path, index=False)
-    log.info(f"  💾 {len(df)} rows → {path.name}")
-    _update_freshness_record(name, len(df), path)
-    return path
+    """Save a DataFrame as ``data/raw/<name>.parquet`` (or R2 key ``raw/<name>.parquet``)."""
+    rel = f"raw/{name}.parquet"
+    uri = get_backend().write_parquet_rel(rel, df)
+    log.info(f"  💾 {len(df)} rows → {name}.parquet")
+    _update_freshness_record(name, len(df), uri)
+    # Callers expect a Path under ``RAW_DIR``; keep that contract for local workflows.
+    return RAW_DIR / f"{name}.parquet"
+
+
+def load_parquets(pattern: str, backend: StorageBackend | None = None) -> pd.DataFrame:
+    """Load and concatenate all ``raw/*.parquet`` files whose basename matches ``pattern``."""
+    be = backend or get_backend()
+    frames: list[pd.DataFrame] = []
+    for fname in be.list_raw_glob(pattern):
+        try:
+            frames.append(be.read_parquet_rel(f"raw/{fname}"))
+        except Exception as e:
+            log.warning(f"Could not load {fname}: {e}")
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def freshness_summary(backend: StorageBackend | None = None) -> dict:
+    """Summarise ``raw/.freshness.json`` for MCP ``data_status``."""
+    be = backend or get_backend()
+    out: dict = {"freshness_entries": 0}
+    rel = "raw/.freshness.json"
+    if not be.exists_rel(rel):
+        return out
+    try:
+        data = be.read_json_rel(rel)
+        out["freshness_entries"] = len(data)
+        times = []
+        for meta in data.values():
+            ts = meta.get("fetched_at")
+            if not ts:
+                continue
+            try:
+                times.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+            except ValueError:
+                continue
+        if times:
+            oldest = min(times)
+            newest = max(times)
+            out["oldest_raw_fetch_utc"] = oldest.isoformat()
+            out["newest_raw_fetch_utc"] = newest.isoformat()
+            age_days = (datetime.now(timezone.utc) - newest).total_seconds() / 86400
+            out["newest_raw_fetch_age_days"] = round(age_days, 2)
+    except Exception as e:
+        out["freshness_error"] = str(e)
+    return out
+
+
+def manifest_summary(backend: StorageBackend | None = None) -> dict:
+    """Read ``manifest.json`` for build timestamps."""
+    be = backend or get_backend()
+    rel = "manifest.json"
+    if not be.exists_rel(rel):
+        return {}
+    try:
+        m = be.read_json_rel(rel)
+        return {
+            k: m[k]
+            for k in ("last_built_at", "oldest_source_fetched_at")
+            if k in m and m[k] is not None
+        }
+    except Exception as e:
+        return {"manifest_error": str(e)}
 
 
 class CheckpointTracker:
