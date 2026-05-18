@@ -13,6 +13,9 @@ from ScraperFC.utils import get_module_comps
 
 comps = get_module_comps("TRANSFERMARKT")
 
+
+# Live requests to transfermarkt — excluded from default CI via tox ``-m "not integration"``.
+@pytest.mark.integration
 class TestTransfermarkt:
 
     # ==============================================================================================

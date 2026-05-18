@@ -3,4 +3,5 @@ addopts = ["-s", "-v", "--cov=ScraperFC"]
 norecursedirs = ["docs", "*.egg-info", ".git", ".tox"]
 markers = [
     "integration: live network / headless Chrome (skip in CI with -m 'not integration')",
+    "contract: one-shot upstream shape checks for the weekly canary workflow",
 ]

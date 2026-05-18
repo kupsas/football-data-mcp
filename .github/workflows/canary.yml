@@ -1,0 +1,29 @@
+# Weekly upstream shape checks for SofaScore, Understat, ClubElo, Transfermarkt.
+# On failure, GitHub emails the account that last edited this workflow's schedule
+# (enable: Settings → Notifications → Actions).
+name: canary
+
+on:
+  schedule:
+    # Tuesdays 00:00 UTC (~05:30 IST) — buffer before mid-week scraper runs.
+    - cron: "0 0 * * 2"
+  workflow_dispatch:
+
+jobs:
+  contract-tests:
+    name: contract-tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python:
+          - version: "3.12"
+            toxenv: "py312"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python.version }}
+      - name: Install tox and uv
+        run: pip install tox uv
+      - name: Run contract (canary) tests
+        run: tox -r -e contract -- --basepython ${{ matrix.python.toxenv }}
