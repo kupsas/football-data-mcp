@@ -906,7 +906,6 @@ def tool_data_status(args: dict) -> dict:
             "transfermarkt_profiles":  len(list(RAW_DIR.glob("transfermarkt__*.parquet"))),
             "transfermarkt_mv_history":len(list(RAW_DIR.glob("transfermarkt_mv_history__*.parquet"))),
             "transfermarkt_transfers": len(list(RAW_DIR.glob("transfermarkt_transfers__*.parquet"))),
-            "capology_wages":          len(list(RAW_DIR.glob("capology__*.parquet"))),
         }
 
     fresh = _freshness_summary()

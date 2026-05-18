@@ -1844,93 +1844,7 @@ def collect_transfermarkt(leagues=None, seasons=None, sleep=2.0):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Capology helpers + collection
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _cap_season(season: str, valid_seasons: list) -> str | None:
-    """Map 'YYYY-YYYY' to whatever string Capology uses (e.g. '2024-25')."""
-    start, end = season.split("-")
-    s2, e2 = start[2:], end[2:]
-    for fmt in [f"{s2}/{e2}", f"{start}/{e2}", f"{start}/{end}",
-                f"{start}-{e2}", f"{start}-{end}"]:
-        if fmt in valid_seasons:
-            return fmt
-    for vs in valid_seasons:
-        if start in vs or s2 in vs:
-            return vs
-    return None
-
-
-def _flatten_capology(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten Capology multi-index columns to snake_case strings."""
-    if not isinstance(df.columns, pd.MultiIndex):
-        return df
-    cols = []
-    for l0, l1 in df.columns:
-        l0c = l0.strip().lower().replace(" ", "_")
-        l1c = l1.strip().lower().replace(" ", "_")
-        if l1c and l1c != l0c:
-            cols.append(f"{l1c}__{l0c}".strip("_"))
-        else:
-            cols.append(l0c)
-    df = df.copy()
-    df.columns = cols
-    return df
-
-
-def collect_capology(leagues=None, seasons=None, currency="eur"):
-    """Scrape player wages from Capology for all supported leagues."""
-    sys.path.insert(0, str(Path(__file__).parent / "src"))
-    try:
-        from ScraperFC import Capology
-    except ImportError as e:
-        log.error(f"Capology import error (Selenium required): {e}")
-        return
-    from ScraperFC.utils import get_module_comps
-
-    all_cap = list(get_module_comps("CAPOLOGY").keys())
-    leagues  = leagues or all_cap
-    seasons  = seasons or SEASONS
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-
-    for league in leagues:
-        if league not in all_cap:
-            log.info(f"  Capology: {league!r} not supported, skipping")
-            continue
-
-        try:
-            valid = Capology().get_valid_seasons(league)
-        except Exception as e:
-            log.warning(f"  Capology get_valid_seasons failed for {league}: {e}")
-            continue
-
-        for season in seasons:
-            cap_year = _cap_season(season, valid)
-            if not cap_year:
-                log.info(f"  Capology: {league} {season} not available")
-                continue
-
-            slug = f"{league.replace(' ','_')}__{season.replace('-','_')}"
-            path = RAW_DIR / f"capology__{slug}.parquet"
-            if path.exists():
-                log.info(f"⏭️  capology__{slug}.parquet")
-                continue
-
-            log.info(f"📡 Capology: {league} {season} ({cap_year}) [{currency.upper()}]")
-            try:
-                df = Capology().scrape_salaries(cap_year, league, currency)
-                df = _flatten_capology(df)
-                df["league"]   = league
-                df["season"]   = season
-                df["currency"] = currency
-                save_raw(df, f"capology__{slug}")
-                log.info(f"  ✅ {len(df)} players")
-            except Exception as e:
-                log.error(f"  ❌ Capology {league} {season}: {e}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Financial merge (Transfermarkt + Capology → unified CSV)
+#  Financial merge (Transfermarkt → unified CSV)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _fuzzy_tm_fill(unmatched: pd.DataFrame, tm_lookup: pd.DataFrame,
@@ -1973,7 +1887,7 @@ def _fuzzy_tm_fill(unmatched: pd.DataFrame, tm_lookup: pd.DataFrame,
 
 
 def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
-    """Add market value, contract, wages to unified DataFrame from TM + Capology."""
+    """Add market value, contract, and related TM fields to the unified DataFrame."""
     unified = unified.copy()  # defragment before adding columns
     unified["_name_norm"] = unified["player"].apply(_norm_name)
 
@@ -2027,40 +1941,6 @@ def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
             log.info(f"  TM merge: {total_matched}/{len(unified)} matched "
                      f"({exact_matched} exact + {fuzzy_matched} fuzzy)")
 
-    # ── Capology ──────────────────────────────────────────────────────────────
-    cap_files = sorted(RAW_DIR.glob("capology__*.parquet"))
-    if cap_files:
-        cap_frames = []
-        for f in cap_files:
-            try:
-                cap_frames.append(pd.read_parquet(f))
-            except Exception as e:
-                log.warning(f"Could not load {f.name}: {e}")
-        if cap_frames:
-            cap_df = pd.concat(cap_frames, ignore_index=True)
-            # Find player name column (first non-league/season text col)
-            name_col = next(
-                (c for c in cap_df.columns
-                 if c not in {"league", "season", "currency"}
-                 and cap_df[c].dtype == object),
-                None,
-            )
-            if name_col:
-                cap_df["_name_norm"] = cap_df[name_col].apply(_norm_name)
-                wage_cols = [c for c in cap_df.columns if any(
-                    kw in c.lower() for kw in ["weekly", "annual", "gross", "wage", "salary"]
-                )]
-                log.info(f"  Capology wage columns: {wage_cols}")
-                if wage_cols:
-                    cap_merge = (
-                        cap_df[["_name_norm", "league", "season"] + wage_cols]
-                        .drop_duplicates(subset=["_name_norm", "league", "season"], keep="first")
-                    )
-                    unified = unified.merge(
-                        cap_merge, on=["_name_norm", "league", "season"], how="left"
-                    )
-                    log.info(f"  Capology merged wage columns: {wage_cols}")
-
     unified = unified.drop(columns=["_name_norm"], errors="ignore")
     return unified
 
@@ -2075,7 +1955,6 @@ _NON_FBREF_PREFIXES = (
     "sofascore__", "sofascore_match_",
     "clubelo__",
     "transfermarkt__", "transfermarkt_mv_history__", "transfermarkt_transfers__",
-    "capology__",
 )
 
 
@@ -2482,7 +2361,7 @@ def build_unified():
     if not ss_df.empty:
         unified = _merge_sofascore_into(unified, ss_df)
 
-    # ── Layer 4: Financial data (Transfermarkt + Capology) ───────────────────
+    # ── Layer 4: Financial data (Transfermarkt) ───────────────────────────────
     unified = merge_financial_data(unified)
 
     return _finalize_and_save(unified)
@@ -2494,7 +2373,7 @@ def build_unified():
 
 def main():
     p = argparse.ArgumentParser(
-        description="Collect football stats — FBref + Understat + SofaScore + Transfermarkt + Capology"
+        description="Collect football stats — FBref + Understat + SofaScore + Transfermarkt"
     )
     p.add_argument("--leagues",                 nargs="*", help="Override league list")
     p.add_argument("--seasons",                 nargs="*", help="Seasons e.g. 2025-2026 2024-2025")
@@ -2526,7 +2405,6 @@ def main():
         ),
     )
     p.add_argument("--transfermarkt-only",      action="store_true", help="Run Transfermarkt player profiles only (~6 hrs)")
-    p.add_argument("--capology-only",           action="store_true", help="Run Capology wages only (~2 hrs)")
     p.add_argument("--rebuild-only",            action="store_true", help="Skip scraping; rebuild unified CSV from raw files")
     # Skip flags
     p.add_argument("--no-fbref",                action="store_true")
@@ -2536,7 +2414,6 @@ def main():
                    help="Skip SofaScore per-match collection on full runs")
     p.add_argument("--no-clubelo",              action="store_true", help="Skip ClubElo snapshot on full runs")
     p.add_argument("--no-transfermarkt",        action="store_true")
-    p.add_argument("--no-capology",             action="store_true")
     args = p.parse_args()
 
     leagues = args.leagues or None
@@ -2553,7 +2430,6 @@ def main():
         ("sofascore_matches", args.sofascore_matches_only),
         ("clubelo",           args.clubelo_only),
         ("transfermarkt",     args.transfermarkt_only),
-        ("capology",          args.capology_only),
     ]
     active_only = next((name for name, flag in only_flags if flag), None)
 
@@ -2632,15 +2508,10 @@ def main():
             collect_transfermarkt(leagues=leagues, seasons=seasons, sleep=args.sleep)
             print()
 
-        if _run("capology"):
-            print("── Capology (wages EUR, all supported leagues) ──────────────────────")
-            collect_capology(leagues=leagues, seasons=seasons, currency="eur")
-            print()
-
     # Only rebuild when: explicit --rebuild-only, full run (no active_only), or
-    # a source that feeds unified CSV was just collected (not tables/matches/TM/Capology alone)
+    # a source that feeds unified CSV was just collected (not tables/matches/TM alone)
     supplementary_only = active_only in (
-        "understat_tables", "understat_matches", "transfermarkt", "capology",
+        "understat_tables", "understat_matches", "transfermarkt",
         "sofascore_matches", "clubelo",
     )
     if not supplementary_only:
