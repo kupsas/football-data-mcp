@@ -2,7 +2,7 @@
 
 A multi-source football data pipeline and MCP server that lets Claude (and any MCP-compatible AI assistant) answer real football analytics questions — player scouting, similarity search, market value filtering, xG tables, match shot maps, and more.
 
-The installable **distribution** on PyPI is named **`football-mcp`** (this repository). The **`ScraperFC`** name still refers to the upstream scraper **Python package** vendored under `src/ScraperFC/` — e.g. `from ScraperFC import Sofascore` — not the PyPI distribution name for this project.
+The installable **distribution** on PyPI is named **`football-data-mcp`** (same as this repository). The **`ScraperFC`** name still refers to the upstream scraper **Python package** vendored under `src/ScraperFC/` — e.g. `from ScraperFC import Sofascore` — not the PyPI distribution name for this project.
 
 Built on top of [ScraperFC](https://github.com/oseymour/ScraperFC) by Owen Seymour.
 
@@ -52,7 +52,7 @@ From a clone of this repo (editable install for development):
 pip install -e .
 ```
 
-That installs the **`football-mcp`** distribution and puts two CLI commands on your `PATH`:
+That installs the **`football-data-mcp`** distribution and puts two CLI commands on your `PATH`:
 
 - **`soccer-mcp`** — same as `python -m soccer_server` (stdio MCP server).
 - **`collect-data`** — same as `python -m collect_data` (data pipeline CLI).
@@ -60,7 +60,7 @@ That installs the **`football-mcp`** distribution and puts two CLI commands on y
 After the first **PyPI** release, end users can install with:
 
 ```bash
-pip install football-mcp
+pip install football-data-mcp
 ```
 
 ### 2. Collect the data
@@ -104,7 +104,7 @@ Add this to your `claude_desktop_config.json` (use **one** of the patterns below
 }
 ```
 
-**If `soccer-mcp` is on your PATH** (after `pip install -e .` or `pip install football-mcp`):
+**If `soccer-mcp` is on your PATH** (after `pip install -e .` or `pip install football-data-mcp`):
 
 ```json
 {
@@ -150,7 +150,7 @@ to CSV for older installs.
 ### Storage backends (local vs R2)
 
 - **Default:** ``DATA_BACKEND=local`` (or unset). All paths live under ``data/`` in the repo.
-- **Cloudflare R2:** set ``DATA_BACKEND=r2`` and install extras: ``pip install -e ".[r2]"`` (from a clone) or ``pip install "football-mcp[r2]"`` (from PyPI once published). Required
+- **Cloudflare R2:** set ``DATA_BACKEND=r2`` and install extras: ``pip install -e ".[r2]"`` (from a clone) or ``pip install "football-data-mcp[r2]"`` (from PyPI once published). Required
   environment variables: ``R2_BUCKET``, ``R2_ENDPOINT_URL``, ``R2_ACCESS_KEY_ID``, ``R2_SECRET_ACCESS_KEY``.
   Object keys mirror local layout (e.g. ``raw/foo.parquet``, ``unified_player_stats.parquet``).
 
