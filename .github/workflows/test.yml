@@ -2,9 +2,6 @@ name: test
 
 on: [push, pull_request]
 
-env:
-  DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
-
 jobs:
   test-clubelo:
     name: test-clubelo
@@ -23,17 +20,6 @@ jobs:
         run: pip install tox uv
       - name: Run tox test env
         run: tox -r -e test-clubelo -- --basepython ${{ matrix.python.toxenv }}
-      - name: Rename coverage artifact
-        if: always()
-        run: mv .coverage .coverage_clubelo
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: clubelo-coverage
-          path: .coverage_clubelo
-          if-no-files-found: error
-          include-hidden-files: true
   test-botasaurus:
     name: test-botasaurus
     runs-on: ubuntu-latest
@@ -51,17 +37,6 @@ jobs:
         run: pip install tox uv
       - name: Run tox test env
         run: tox -r -e test-botasaurus -- --basepython ${{ matrix.python.toxenv }}
-      - name: Rename coverage artifact
-        if: always()
-        run: mv .coverage .coverage_botasaurus
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: botasaurus-coverage
-          path: .coverage_botasaurus
-          if-no-files-found: error
-          include-hidden-files: true
   test-sofascore:
     name: test-sofascore
     runs-on: ubuntu-latest
@@ -79,17 +54,6 @@ jobs:
         run: pip install tox uv
       - name: Run tox test env
         run: tox -r -e test-sofascore -- --basepython ${{ matrix.python.toxenv }}
-      - name: Rename coverage artifact
-        if: always()
-        run: mv .coverage .coverage_sofascore
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sofascore-coverage
-          path: .coverage_sofascore
-          if-no-files-found: error
-          include-hidden-files: true
   test-transfermarkt:
     name: test-transfermarkt
     runs-on: ubuntu-latest
@@ -107,17 +71,6 @@ jobs:
         run: pip install tox uv
       - name: Run tox test env
         run: tox -r -e test-transfermarkt -- --basepython ${{ matrix.python.toxenv }}
-      - name: Rename coverage artifact
-        if: always()
-        run: mv .coverage .coverage_transfermarkt
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: transfermarkt-coverage
-          path: .coverage_transfermarkt
-          if-no-files-found: error
-          include-hidden-files: true
   test-understat:
     name: test-understat
     runs-on: ubuntu-latest
@@ -135,39 +88,6 @@ jobs:
         run: pip install tox uv
       - name: Run tox test env
         run: tox -r -e test-understat -- --basepython ${{ matrix.python.toxenv }}
-      - name: Rename coverage artifact
-        if: always()
-        run: mv .coverage .coverage_understat
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: understat-coverage
-          path: .coverage_understat
-          if-no-files-found: error
-          include-hidden-files: true
-  send-coverage-to-deepsource:
-    name: send-coverage-to-deepsource
-    runs-on: ubuntu-latest
-    needs: [
-      test-clubelo, test-botasaurus, test-sofascore, test-transfermarkt, test-understat
-    ]
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4  # downloads all artifacts
-      - name: Combine coverage files and convert to XML
-        run: |
-          pip install coverage
-          coverage combine ./clubelo-coverage/.coverage_clubelo\
-            ./botasaurus-coverage/.coverage_botasaurus ./sofascore-coverage/.coverage_sofascore\
-            ./transfermarkt-coverage/.coverage_transfermarkt ./understat-coverage/.coverage_understat
-          coverage report
-          coverage xml
-      - name: Send coverage to DeepSource
-        run: |
-          curl https://deepsource.io/cli | sh
-          ./bin/deepsource report --analyzer test-coverage --key python --value-file coverage.xml
   test-build-docs:
     name: test-build-docs
     runs-on: ubuntu-latest
