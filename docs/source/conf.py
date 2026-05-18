@@ -27,6 +27,21 @@ author = "Owen Seymour"
 # ones.
 extensions = ["sphinx.ext.autodoc", "sphinx.ext.napoleon", "sphinx.ext.intersphinx", "myst_nb"]
 
+# Botasaurus (via ``botasaurus_requests``) downloads a native helper from GitHub on first import.
+# CI runners share IPs and quickly hit ``api.github.com`` unauthenticated rate limits, which makes
+# autodoc fail to import ``ScraperFC`` and turns those failures into warnings (-W then fails the
+# build). Stub these packages so API docs build offline.
+autodoc_mock_imports = [
+    "botasaurus",
+    "botasaurus_requests",
+    "botasaurus_driver",
+    "botasaurus_api",
+    "botasaurus_proxy_authentication",
+    "botasaurus_humancursor",
+    "bota",
+    "close_chrome",
+]
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 

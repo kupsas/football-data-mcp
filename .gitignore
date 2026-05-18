@@ -1,4 +1,6 @@
 ScraperFC.egg-info
+football_mcp.egg-info
+football_data_mcp.egg-info
 __pycache__
 .ipynb_checkpoints
 -checkpoint.ipynb
