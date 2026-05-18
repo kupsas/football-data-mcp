@@ -81,6 +81,9 @@ lint = [
     "pydoclint>=0.8.3",
     "sphinx-lint>=1.0.2",
 ]
+r2 = [
+    "boto3>=1.35.0",
+]
 
 [project.urls]
 repository = "https://github.com/oseymour/ScraperFC/"
@@ -97,7 +100,7 @@ build-backend = "setuptools.build_meta"
 # Top-level ``collect_data`` package (CLI / pipeline) plus ``src/ScraperFC`` for editable installs and tox.
 [tool.setuptools.packages.find]
 where = [".", "src"]
-include = ["ScraperFC*", "collect_data*"]
+include = ["ScraperFC*", "collect_data*", "soccer_server*"]
 
 # -- Typechecking ----------------------------------------------------------------------------------
 [tool.mypy]

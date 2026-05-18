@@ -8,7 +8,7 @@ import pandas as pd
 
 from collect_data.config import MANUAL_TM_OVERRIDES
 from collect_data.helpers import _norm_name
-from collect_data.storage import RAW_DIR
+from collect_data.storage import get_backend
 
 log = logging.getLogger(__name__)
 
@@ -60,15 +60,18 @@ def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
     # ── Transfermarkt ─────────────────────────────────────────────────────────
     # Pass 1: exact name match on name+league+season
     # Pass 2: rapidfuzz WRatio fuzzy match for what's still unmatched
-    tm_files = [f for f in sorted(RAW_DIR.glob("transfermarkt__*.parquet"))
-                if "mv_history" not in f.name and "transfers" not in f.name]
+    be = get_backend()
+    tm_files = [
+        n for n in sorted(be.list_raw_glob("transfermarkt__*.parquet"))
+        if "mv_history" not in n and "transfers" not in n
+    ]
     if tm_files:
         tm_frames = []
-        for f in tm_files:
+        for fname in tm_files:
             try:
-                tm_frames.append(pd.read_parquet(f))
+                tm_frames.append(be.read_parquet_rel(f"raw/{fname}"))
             except Exception as e:
-                log.warning(f"Could not load {f.name}: {e}")
+                log.warning(f"Could not load {fname}: {e}")
         if tm_frames:
             tm_df = pd.concat(tm_frames, ignore_index=True)
             if "_name_norm" not in tm_df.columns:
@@ -108,14 +111,14 @@ def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
                      f"({exact_matched} exact + {fuzzy_matched} fuzzy)")
 
     # ── Capology ──────────────────────────────────────────────────────────────
-    cap_files = sorted(RAW_DIR.glob("capology__*.parquet"))
+    cap_files = sorted(be.list_raw_glob("capology__*.parquet"))
     if cap_files:
         cap_frames = []
-        for f in cap_files:
+        for fname in cap_files:
             try:
-                cap_frames.append(pd.read_parquet(f))
+                cap_frames.append(be.read_parquet_rel(f"raw/{fname}"))
             except Exception as e:
-                log.warning(f"Could not load {f.name}: {e}")
+                log.warning(f"Could not load {fname}: {e}")
         if cap_frames:
             cap_df = pd.concat(cap_frames, ignore_index=True)
             # Find player name column (first non-league/season text col)

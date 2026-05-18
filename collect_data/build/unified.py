@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 
@@ -11,7 +10,7 @@ import pandas as pd
 from collect_data.config import UNDERSTAT_AUTHORITATIVE
 from collect_data.helpers import _norm_name
 from collect_data.build.financials import merge_financial_data
-from collect_data.storage import DATA_DIR, FRESHNESS_PATH, RAW_DIR
+from collect_data.storage import get_backend, load_parquets
 
 log = logging.getLogger(__name__)
 
@@ -26,35 +25,24 @@ _NON_FBREF_PREFIXES = (
 
 
 def load_all_fbref_raw() -> pd.DataFrame:
+    be = get_backend()
     frames = []
-    for f in sorted(RAW_DIR.glob("*.parquet")):
-        if f.name.startswith(_NON_FBREF_PREFIXES):
+    for fname in sorted(be.list_raw_glob("*.parquet")):
+        if fname.startswith(_NON_FBREF_PREFIXES):
             continue
         try:
-            frames.append(pd.read_parquet(f))
+            frames.append(be.read_parquet_rel(f"raw/{fname}"))
         except Exception as e:
-            log.warning(f"Could not load {f.name}: {e}")
+            log.warning(f"Could not load {fname}: {e}")
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def load_all_understat_raw() -> pd.DataFrame:
-    frames = []
-    for f in sorted(RAW_DIR.glob("understat__*.parquet")):
-        try:
-            frames.append(pd.read_parquet(f))
-        except Exception as e:
-            log.warning(f"Could not load {f.name}: {e}")
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return load_parquets("understat__*.parquet")
 
 
 def load_all_sofascore_raw() -> pd.DataFrame:
-    frames = []
-    for f in sorted(RAW_DIR.glob("sofascore__*.parquet")):
-        try:
-            frames.append(pd.read_parquet(f))
-        except Exception as e:
-            log.warning(f"Could not load {f.name}: {e}")
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return load_parquets("sofascore__*.parquet")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -309,15 +297,13 @@ def _finalize_and_save(
         unified = unified.sort_values(sort_cols).reset_index(drop=True)
 
     # Save primary artifact as Parquet (columnar, typed, compact).
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    out_pq = DATA_DIR / "unified_player_stats.parquet"
-    unified.to_parquet(out_pq, index=False)
+    be = get_backend()
+    out_pq = be.write_parquet_rel("unified_player_stats.parquet", unified)
     log.info(
         f"✅ Unified Parquet: {len(unified)} rows × {len(unified.columns)} cols → {out_pq}"
     )
     if export_csv:
-        out_csv = DATA_DIR / "unified_player_stats.csv"
-        unified.to_csv(out_csv, index=False)
+        out_csv = be.write_csv_rel("unified_player_stats.csv", unified)
         log.info(f"  (also wrote CSV for spreadsheet use → {out_csv})")
 
     manifest = {
@@ -332,9 +318,9 @@ def _finalize_and_save(
         "last_built_at": datetime.now(timezone.utc).isoformat(),
     }
     oldest = None
-    if FRESHNESS_PATH.exists():
+    if be.exists_rel("raw/.freshness.json"):
         try:
-            fr = json.loads(FRESHNESS_PATH.read_text(encoding="utf-8"))
+            fr = be.read_json_rel("raw/.freshness.json")
             for _k, meta in fr.items():
                 ts = meta.get("fetched_at")
                 if not ts:
@@ -348,7 +334,7 @@ def _finalize_and_save(
         except Exception as e:
             log.warning(f"Could not read freshness for manifest: {e}")
     manifest["oldest_source_fetched_at"] = oldest.isoformat() if oldest else None
-    (DATA_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    be.write_json_rel("manifest.json", manifest)
     log.info("📋 Manifest saved")
     return unified
 
