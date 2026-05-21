@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 
-from collect_data.config import FBREF_LEAGUES, SEASONS, STAT_CATEGORIES
+from collect_data.config import SEASONS
 from collect_data.build.unified import build_unified
 from collect_data.collectors.capology import collect_capology
 from collect_data.collectors.clubelo import collect_clubelo
-from collect_data.collectors.fbref import collect_fbref
 from collect_data.collectors.sofascore import collect_sofascore
 from collect_data.collectors.sofascore_matches import collect_sofascore_matches
 from collect_data.collectors.transfermarkt import collect_transfermarkt
@@ -21,17 +20,18 @@ from collect_data.collectors.understat import (
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Collect football stats — FBref + Understat + SofaScore + Transfermarkt + Capology"
+        description=(
+            "Collect football stats — Understat + SofaScore + ClubElo + "
+            "Transfermarkt + Capology"
+        )
     )
     p.add_argument("--leagues",                 nargs="*", help="Override league list")
     p.add_argument("--seasons",                 nargs="*", help="Seasons e.g. 2025-2026 2024-2025")
-    p.add_argument("--stats",                   nargs="*", help="FBref stat categories")
-    p.add_argument("--wait",                    type=int,   default=7,   help="FBref request delay (s)")
-    p.add_argument("--sleep",                   type=float, default=0.5, help="Sleep between requests for TM / Understat matches")
+    p.add_argument("--sleep",                   type=float, default=0.5,
+                   help="Sleep between requests for TM / Understat matches")
     p.add_argument("--export-csv",              action="store_true",
                    help="Also write unified_player_stats.csv alongside the Parquet build")
     # Source flags
-    p.add_argument("--fbref-only",              action="store_true")
     p.add_argument("--understat-only",          action="store_true", help="Run old Understat season stats only")
     p.add_argument("--understat-tables-only",   action="store_true", help="Run Understat league tables only (fast)")
     p.add_argument("--understat-matches-only",  action="store_true", help="Run Understat match shots + rosters only (~90 min)")
@@ -58,7 +58,6 @@ def main() -> None:
     p.add_argument("--capology-only",           action="store_true", help="Run Capology wages only (~2 hrs)")
     p.add_argument("--rebuild-only",            action="store_true", help="Skip scraping; rebuild unified table from raw files")
     # Skip flags
-    p.add_argument("--no-fbref",                action="store_true")
     p.add_argument("--no-understat",            action="store_true")
     p.add_argument("--no-sofascore",            action="store_true")
     p.add_argument("--no-sofascore-matches",    action="store_true",
@@ -70,10 +69,8 @@ def main() -> None:
 
     leagues = args.leagues or None
     seasons = args.seasons or SEASONS
-    stats   = args.stats   or STAT_CATEGORIES
 
     only_flags = [
-        ("fbref",             args.fbref_only),
         ("understat",         args.understat_only),
         ("understat_tables",  args.understat_tables_only),
         ("understat_matches", args.understat_matches_only),
@@ -147,12 +144,6 @@ def main() -> None:
         if run_clubelo:
             print("── ClubElo (ratings + fixtures) ─────────────────────────────────────")
             collect_clubelo(date=args.clubelo_date)
-            print()
-
-        if _run("fbref"):
-            print("── FBref (basic stats, 8 leagues) ──────────────────────────────────")
-            collect_fbref(leagues=leagues or FBREF_LEAGUES,
-                          seasons=seasons, stat_categories=stats, wait_time=args.wait)
             print()
 
         if _run("transfermarkt"):

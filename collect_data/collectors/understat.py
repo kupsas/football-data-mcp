@@ -16,7 +16,7 @@ from collect_data.config import (
     UNDERSTAT_HEADERS,
     UNDERSTAT_LEAGUES,
 )
-from collect_data.helpers import _norm_name, fbref_season_to_understat
+from collect_data.helpers import _norm_name, season_to_understat_year
 from collect_data.storage import RAW_DIR, save_raw
 
 log = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def collect_understat(leagues=None, seasons=None):
             log.info(f"  Understat: skipping {league} (not Big 5)")
             continue
         for season in seasons:
-            us_year = fbref_season_to_understat(season)
+            us_year = season_to_understat_year(season)
             fname = f"understat__{league.replace(' ', '_')}__{season.replace('-', '_')}"
             raw_path = RAW_DIR / f"{fname}.parquet"
             if raw_path.exists():
@@ -128,7 +128,7 @@ def collect_understat_league_tables(leagues=None, seasons=None):
         if not code:
             continue
         for season in seasons:
-            us_year = fbref_season_to_understat(season)
+            us_year = season_to_understat_year(season)
             slug = f"{league.replace(' ', '_')}__{season.replace('-', '_')}"
             overall_path = RAW_DIR / f"understat_league_table__{slug}__overall.parquet"
             if overall_path.exists():
@@ -227,7 +227,7 @@ def collect_understat_matches(leagues=None, seasons=None, sleep=0.5):
         if not code:
             continue
         for season in seasons:
-            us_year = fbref_season_to_understat(season)
+            us_year = season_to_understat_year(season)
             slug = f"{league.replace(' ', '_')}__{season.replace('-', '_')}"
             shots_path = RAW_DIR / f"understat_match_shots__{slug}.parquet"
             if shots_path.exists():

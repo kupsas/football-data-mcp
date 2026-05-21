@@ -2,58 +2,7 @@
 
 from __future__ import annotations
 
-FBREF_LEAGUES = [
-    "England Premier League",
-    "Spain La Liga",
-    "Germany Bundesliga",
-    "Italy Serie A",
-    "France Ligue 1",
-    "Netherlands Eredivisie",
-    "Portugal Primeira Liga",
-    "Belgium Pro League",
-]
-
 SEASONS = ["2025-2026", "2024-2025", "2023-2024"]
-
-STAT_CATEGORIES = [
-    "standard", "shooting", "passing", "pass types",
-    "goal and shot creation", "defensive", "possession",
-    "playing time", "misc", "goalkeeping", "advanced goalkeeping",
-]
-
-# Rename FBref leaf column name → our canonical snake_case name
-FBREF_COL_RENAME = {
-    "Player": "player", "Nation": "nation", "Pos": "pos", "Squad": "team",
-    "Age": "age", "Born": "born",
-    "MP": "games", "Starts": "starts", "Min": "minutes", "90s": "ninety_s",
-    "Gls": "goals", "Ast": "assists", "G+A": "goals_assists",
-    "G-PK": "goals_non_pen", "PK": "pens_scored", "PKatt": "pens_att",
-    "CrdY": "yellow_cards", "CrdR": "red_cards",
-    "xG": "xg_fbref", "npxG": "npxg_fbref", "xAG": "xag_fbref",
-    "Sh": "shots", "SoT": "shots_on_target", "SoT%": "shot_on_target_pct",
-    "G/Sh": "goals_per_shot", "Dist": "shot_distance",
-    "Cmp": "passes_completed", "Att": "passes_attempted",
-    "Cmp%": "pass_completion_pct", "PrgDist": "progressive_pass_dist",
-    "KP": "key_passes", "1/3": "passes_final_third",
-    "PPA": "passes_penalty_area", "CrsPA": "crosses_penalty_area",
-    "PrgP": "progressive_passes",
-    "SCA": "sca", "SCA90": "sca_per90", "GCA": "gca", "GCA90": "gca_per90",
-    "Tkl": "tackles_fbref", "TklW": "tackles_won",
-    "Def 3rd": "tackles_def_3rd", "Mid 3rd": "tackles_mid_3rd",
-    "Att 3rd": "tackles_att_3rd",
-    "Int": "interceptions", "Tkl+Int": "tackles_interceptions",
-    "Clr": "clearances", "Err": "errors", "Blocks": "blocks",
-    "Touches": "touches", "Carries": "carries",
-    "PrgC": "progressive_carries",
-    "Rec": "passes_received", "PrgR": "progressive_passes_received",
-    "Fls": "fouls", "Fld": "fouled", "Off": "offsides", "Crs": "crosses",
-    "Won": "aerials_won", "Lost": "aerials_lost", "Won%": "aerials_won_pct",
-    "GA": "goals_against", "GA90": "goals_against_per90",
-    "SoTA": "shots_on_target_against", "Saves": "saves",
-    "Save%": "save_pct", "CS": "clean_sheets", "CS%": "clean_sheet_pct",
-    "PKsv": "pens_saved",
-    "Player ID": "player_id", "Team ID": "team_id",
-}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

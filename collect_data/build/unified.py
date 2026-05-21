@@ -1,4 +1,4 @@
-"""Build ``unified_player_stats`` from raw parquet layers (FBref, Understat, SofaScore)."""
+"""Build ``unified_player_stats`` from raw parquet layers (Understat, SofaScore, financials)."""
 
 from __future__ import annotations
 
@@ -13,29 +13,6 @@ from collect_data.build.financials import merge_financial_data
 from collect_data.storage import get_backend, load_parquets
 
 log = logging.getLogger(__name__)
-
-_NON_FBREF_PREFIXES = (
-    "understat__", "understat_league_table__", "understat_match_info__",
-    "understat_match_shots__", "understat_rosters__",
-    "sofascore__", "sofascore_match_",
-    "clubelo__",
-    "transfermarkt__", "transfermarkt_mv_history__", "transfermarkt_transfers__",
-    "capology__",
-)
-
-
-def load_all_fbref_raw() -> pd.DataFrame:
-    be = get_backend()
-    frames = []
-    for fname in sorted(be.list_raw_glob("*.parquet")):
-        if fname.startswith(_NON_FBREF_PREFIXES):
-            continue
-        try:
-            frames.append(be.read_parquet_rel(f"raw/{fname}"))
-        except Exception as e:
-            log.warning(f"Could not load {fname}: {e}")
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
 
 def load_all_understat_raw() -> pd.DataFrame:
     return load_parquets("understat__*.parquet")
@@ -96,7 +73,7 @@ def _build_base_from_sofascore(ss_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _merge_understat_into(unified: pd.DataFrame, us_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge Understat xG/xA columns into an existing FBref-based unified frame."""
+    """Merge Understat xG/xA columns into an existing unified frame (SofaScore-only base)."""
     if us_df.empty:
         return unified
     log.info(f"  Merging Understat: {len(us_df)} records, {us_df['league'].nunique()} leagues")
@@ -348,77 +325,32 @@ def build_unified(export_csv: bool = False):
     Merge all raw data into data/unified_player_stats.parquet.
 
     Layer order (each adds/overrides):
-      1. FBref   — basic stats, all leagues, if available
-      2. Understat — xG/xA for Big 5 leagues (overrides FBref xG when present)
-      3. SofaScore — 80+ stats for 37 leagues; adds rows for non-FBref leagues
+      1. Understat — season xG/xA and core stats for Big 5 leagues (base when present)
+      2. SofaScore — 80+ stats; merges into Big 5 rows; adds rows for other leagues
+      3. Transfermarkt + Capology — market value, wages, contract (via merge_financial_data)
+
+    Leagues without Understat use a SofaScore-only base.
     """
     log.info("🔨 Building unified player stats …")
 
-    fbref_df = load_all_fbref_raw()
-    us_df    = load_all_understat_raw()
-    ss_df    = load_all_sofascore_raw()
+    us_df = load_all_understat_raw()
+    ss_df = load_all_sofascore_raw()
 
-    if fbref_df.empty and us_df.empty and ss_df.empty:
-        log.error("No raw data found. Run: python3 collect_data.py")
+    if us_df.empty and ss_df.empty:
+        log.error("No raw data found. Run: python3 -m collect_data")
         return pd.DataFrame()
 
-    key = ["player", "team", "league", "season"]
-
-    # ── Layer 1: FBref base ──────────────────────────────────────────────────
-    if not fbref_df.empty:
-        cats = list(fbref_df["stat_category"].unique())
-        log.info(f"  FBref categories: {sorted(cats)}")
-
-        base_cats  = ["standard", "playing time", "misc"]
-        other_cats = [c for c in cats if c not in base_cats]
-
-        def dedup(df):
-            if df.empty:
-                return df
-            df = df.copy()
-            df["_score"] = df.notna().sum(axis=1)
-            return (df.sort_values("_score", ascending=False)
-                      .drop_duplicates(subset=key, keep="first")
-                      .drop(columns=["_score"]))
-
-        base_frames = [dedup(fbref_df[fbref_df["stat_category"]==c]
-                             .drop(columns=["stat_category"], errors="ignore"))
-                       for c in base_cats if c in cats]
-        if not base_frames:
-            base_frames = [dedup(fbref_df[fbref_df["stat_category"]==cats[0]]
-                                 .drop(columns=["stat_category"], errors="ignore"))]
-
-        unified = base_frames[0]
-        for df in base_frames[1:]:
-            new_cols = [c for c in df.columns if c not in unified.columns or c in key]
-            unified  = unified.merge(df[new_cols], on=key, how="outer", suffixes=("","_dup"))
-            unified  = unified[[c for c in unified.columns if not c.endswith("_dup")]]
-
-        for cat in other_cats:
-            cat_df = dedup(fbref_df[fbref_df["stat_category"]==cat]
-                           .drop(columns=["stat_category","nation","pos","age","born",
-                                          "player_id","team_id"], errors="ignore"))
-            if cat_df.empty:
-                continue
-            new_cols = [c for c in cat_df.columns if c not in unified.columns or c in key]
-            if len(new_cols) <= len(key):
-                continue
-            unified = unified.merge(cat_df[new_cols], on=key, how="left", suffixes=("","_dup"))
-            unified = unified[[c for c in unified.columns if not c.endswith("_dup")]]
-            log.info(f"  FBref '{cat}': {len(unified)} rows, {len(unified.columns)} cols")
-
-    elif not us_df.empty:
-        # No FBref — build base from Understat
+    # ── Layer 1: base (Understat for Big 5, else SofaScore) ─────────────────
+    if not us_df.empty:
+        log.info("  Base from Understat (Big 5)")
         unified = _build_base_from_understat(us_df)
-        us_df   = pd.DataFrame()  # already consumed
-
-    elif not ss_df.empty:
-        # No FBref, no Understat — build entirely from SofaScore
-        log.info("  No FBref/Understat — building base from SofaScore only")
+        us_df = pd.DataFrame()  # xG already in base
+    else:
+        log.info("  Base from SofaScore only (no Understat raw)")
         unified = _build_base_from_sofascore(ss_df)
-        ss_df   = pd.DataFrame()  # already consumed
+        ss_df = pd.DataFrame()  # already consumed
 
-    # ── Layer 2: Understat xG ────────────────────────────────────────────────
+    # ── Layer 2: Understat xG (SofaScore-only base, e.g. partial Big 5) ─────
     if not us_df.empty:
         unified = _merge_understat_into(unified, us_df)
 

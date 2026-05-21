@@ -112,7 +112,9 @@ That installs two commands you can run from any folder:
 
 ### 2. Collect the data
 
-First-time full download takes a while (some sites open a headless browser in the background):
+First-time full download takes a while (some sites open a headless browser in the background).
+
+Stats are collected from **Understat**, **SofaScore**, **ClubElo**, **Transfermarkt**, and **Capology** (see `CHANGELOG.md` for recent pipeline changes).
 
 ```bash
 collect-data
@@ -283,4 +285,4 @@ For issues specific to the pipeline (`collect_data` package / `collect-data` / `
 ## Credits
 
 - [ScraperFC](https://github.com/oseymour/ScraperFC) by Owen Seymour — the foundation this project builds on
-- Data sources: [FBref](https://fbref.com), [SofaScore](https://sofascore.com), [Understat](https://understat.com), [Transfermarkt](https://transfermarkt.us)
+- Data sources: [Understat](https://understat.com), [SofaScore](https://sofascore.com), [ClubElo](http://clubelo.com), [Transfermarkt](https://transfermarkt.us), [Capology](https://capology.com)

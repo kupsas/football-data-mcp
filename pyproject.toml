@@ -9,7 +9,7 @@ requires-python = ">= 3.10"
 keywords = [
     "webscraping", "scraping", "soccer", "football", "soccer data", "football data",
     "English Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League",
-    "World Cup", "FBref", "Sofascore", "ClubElo", "Capology", "Understat", "Transfermarkt",
+    "World Cup", "Sofascore", "ClubElo", "Capology", "Understat", "Transfermarkt",
     "MCP", "analytics",
 ]
 # Original ScraperFC package author: Owen Seymour <osmour043@gmail.com>
