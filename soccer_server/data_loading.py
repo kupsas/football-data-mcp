@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -38,6 +39,71 @@ def _row_to_dict(row: pd.Series) -> dict:
     return {k: _safe(v) for k, v in row.items() if not k.startswith("_")}
 
 
+def _player_query_tokens(query: str) -> list[str]:
+    """Split a player search into lowercase tokens (handles hyphens and spaces)."""
+    return [t for t in re.split(r"[\s\-]+", query.lower()) if t]
+
+
+def _player_name_matches_tokens(name_lower: str, tokens: list[str]) -> bool:
+    """True when every query token appears somewhere in the stored player name."""
+    if not tokens:
+        return False
+    return all(tok in name_lower for tok in tokens)
+
+
+def suggest_similar_players(
+    df: pd.DataFrame,
+    query: str,
+    n: int = 6,
+) -> list[str]:
+    """
+    Return up to ``n`` player names similar to ``query``.
+
+    Combines token overlap (fixes reversed names like Heung-Min Son vs Son Heung-Min)
+    with rapidfuzz WRatio on unique names in ``df``.
+    """
+    if df.empty or not str(query).strip():
+        return []
+    if "player" not in df.columns:
+        return []
+
+    names = df["player"].dropna().astype(str).unique().tolist()
+    if not names:
+        return []
+
+    tokens = _player_query_tokens(query)
+    scores: dict[str, float] = {}
+
+    for name in names:
+        low = name.lower()
+        if tokens and _player_name_matches_tokens(low, tokens):
+            scores[name] = max(scores.get(name, 0.0), 95.0)
+        elif tokens:
+            overlap = sum(1 for t in tokens if t in low) / len(tokens)
+            if overlap >= 0.5:
+                scores[name] = max(scores.get(name, 0.0), 50.0 + 40.0 * overlap)
+
+    try:
+        from rapidfuzz import fuzz, process
+
+        for name, score, _ in process.extract(
+            query,
+            names,
+            scorer=fuzz.WRatio,
+            limit=max(n * 3, n),
+            score_cutoff=55,
+        ):
+            scores[name] = max(scores.get(name, 0.0), float(score))
+    except ImportError:
+        qlow = query.lower()
+        for name in names:
+            if qlow in name.lower() or name.lower() in qlow:
+                scores[name] = max(scores.get(name, 0.0), 70.0)
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return [name for name, _ in ranked[:n]]
+
+
 def _filter(
     df: pd.DataFrame,
     player: str | None = None,
@@ -50,7 +116,17 @@ def _filter(
 ) -> pd.DataFrame:
     """Filter a unified DataFrame in memory (used after DuckDB load)."""
     if player:
-        df = df[df["_player_lower"].str.contains(player.lower(), na=False)]
+        tokens = _player_query_tokens(player)
+        if tokens:
+            df = df[
+                df["_player_lower"].apply(
+                    lambda s: _player_name_matches_tokens(str(s), tokens)
+                    if pd.notna(s)
+                    else False
+                )
+            ]
+        else:
+            df = df[df["_player_lower"].str.contains(player.lower(), na=False)]
     if team:
         df = df[df["_team_lower"].str.contains(team.lower(), na=False)]
     if league:

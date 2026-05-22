@@ -9,6 +9,7 @@ import pandas as pd
 
 from collect_data.config import UNDERSTAT_AUTHORITATIVE
 from collect_data.helpers import _norm_name
+from collect_data.build.eafc import merge_eafc_data
 from collect_data.build.financials import merge_financial_data
 from collect_data.storage import get_backend, load_parquets
 
@@ -328,6 +329,7 @@ def build_unified(export_csv: bool = False):
       1. Understat — season xG/xA and core stats for Big 5 leagues (base when present)
       2. SofaScore — 80+ stats; merges into Big 5 rows; adds rows for other leagues
       3. Transfermarkt + Capology — market value, wages, contract (via merge_financial_data)
+      4. EA FC — physical/technical attributes, traits, work rates (via merge_eafc_data)
 
     Leagues without Understat use a SofaScore-only base.
     """
@@ -360,6 +362,9 @@ def build_unified(export_csv: bool = False):
 
     # ── Layer 4: Financial data (Transfermarkt + Capology) ───────────────────
     unified = merge_financial_data(unified)
+
+    # ── Layer 5: EA FC player attributes ─────────────────────────────────────
+    unified = merge_eafc_data(unified)
 
     result = _finalize_and_save(unified, export_csv=export_csv)
     try:

@@ -135,6 +135,20 @@ _EMPTY_VIEW_SQL: dict[str, str] = {
                CAST(NULL AS DOUBLE) AS big_chances_away
         WHERE false
     """,
+    "sofascore_avg_positions": """
+        SELECT CAST(NULL AS BIGINT) AS match_id, CAST(NULL AS BIGINT) AS player_id,
+               CAST(NULL AS VARCHAR) AS player_name, CAST(NULL AS VARCHAR) AS team,
+               CAST(NULL AS DOUBLE) AS average_x, CAST(NULL AS DOUBLE) AS average_y,
+               CAST(NULL AS VARCHAR) AS league, CAST(NULL AS VARCHAR) AS season
+        WHERE false
+    """,
+    "sofascore_heatmaps": """
+        SELECT CAST(NULL AS BIGINT) AS match_id, CAST(NULL AS BIGINT) AS player_id,
+               CAST(NULL AS VARCHAR) AS player_name, CAST(NULL AS DOUBLE) AS touch_x,
+               CAST(NULL AS DOUBLE) AS touch_y, CAST(NULL AS VARCHAR) AS league,
+               CAST(NULL AS VARCHAR) AS season
+        WHERE false
+    """,
     "sofascore_match_shots": """
         SELECT CAST(NULL AS BIGINT) AS match_id, CAST(NULL AS BIGINT) AS player_id,
                CAST(NULL AS VARCHAR) AS player_name, CAST(NULL AS BOOLEAN) AS is_home,
@@ -212,6 +226,11 @@ _RAW_FAMILIES: list[tuple[str, str]] = [
     ("clubelo_global", "raw/clubelo__global__*.parquet"),
     ("clubelo_fixtures", "raw/clubelo__fixtures__*.parquet"),
     ("transfermarkt_profiles", "raw/transfermarkt__*.parquet"),
+    ("transfermarkt_mv_history", "raw/transfermarkt_mv_history__*.parquet"),
+    ("transfermarkt_transfers", "raw/transfermarkt_transfers__*.parquet"),
+    ("eafc_attributes", "raw/eafc__*.parquet"),
+    ("sofascore_avg_positions", "raw/sofascore_avg_positions__*.parquet"),
+    ("sofascore_heatmaps", "raw/sofascore_heatmaps__*.parquet"),
 ]
 
 
@@ -424,6 +443,27 @@ def _register_aggregate_views(con: duckdb.DuckDBPyConnection) -> None:
         FROM sofascore_match_shots
         WHERE player_name IS NOT NULL AND player_name <> ''
         GROUP BY player_name, league, season
+        """
+    )
+
+    # Season-level average pitch position per player (from match-level SofaScore data).
+    con.execute(
+        """
+        CREATE OR REPLACE VIEW player_avg_position AS
+        SELECT
+            player_name,
+            league,
+            season,
+            team,
+            count(*) AS matches_with_position,
+            round(avg(try_cast(average_x AS DOUBLE)), 2) AS avg_x,
+            round(avg(try_cast(average_y AS DOUBLE)), 2) AS avg_y,
+            round(stddev_samp(try_cast(average_x AS DOUBLE)), 2) AS std_x,
+            round(stddev_samp(try_cast(average_y AS DOUBLE)), 2) AS std_y
+        FROM sofascore_avg_positions
+        WHERE player_name IS NOT NULL AND player_name <> ''
+          AND average_x IS NOT NULL AND average_y IS NOT NULL
+        GROUP BY player_name, league, season, team
         """
     )
 

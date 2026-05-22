@@ -45,6 +45,59 @@ def _norm_name(name: str) -> str:
     return " ".join(clean.split())
 
 
+def _primary_team(team: str) -> str:
+    """
+    SofaScore sometimes lists several clubs in one cell (``AC Milan,Napoli``).
+
+    For matching we use only the first club — the primary / current side in our data.
+    """
+    if not isinstance(team, str):
+        return ""
+    s = team.strip()
+    if not s or s.lower() in ("nan", "none", "null"):
+        return ""
+    return s.split(",")[0].strip()
+
+
+def _norm_team(team: str) -> str:
+    """Normalise club/team label for fuzzy matching (accents stripped, lowercase)."""
+    if not isinstance(team, str):
+        return ""
+    s = team.strip()
+    if not s or s.lower() in ("nan", "none", "null", "n/a", "free agents", "free agent"):
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    ascii_team = nfkd.encode("ascii", "ignore").decode("ascii")
+    clean = re.sub(r"[^a-z0-9 ]", "", ascii_team.lower())
+    return " ".join(clean.split())
+
+
+def _club_norm_for_match(team: str) -> str:
+    """Primary club from a unified ``team`` cell, normalised for EA FC fuzzy merge."""
+    return _norm_team(_primary_team(team))
+
+
+def _team_clubs_norm_list(team: str) -> list[str]:
+    """
+    All clubs in a SofaScore ``team`` cell (``Osasuna,Real Valladolid`` → two entries).
+
+    Used for multi-pass EA FC fuzzy merge: try the first club, then the second, etc.
+    """
+    if not isinstance(team, str):
+        return []
+    s = team.strip()
+    if not s or s.lower() in ("nan", "none", "null"):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in s.split(","):
+        norm = _norm_team(part.strip())
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
 def _ss_retry(fn, *args, retries: int = 3, base_sleep: float = 8.0, label: str = "", **kwargs):
     """
     Call fn(*args, **kwargs) up to `retries` times.

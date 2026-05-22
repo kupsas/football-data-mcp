@@ -36,6 +36,18 @@ def not_found_error(entity: str, query: str) -> dict[str, Any]:
     ).to_dict()
 
 
+def not_found_with_suggestions(
+    entity: str,
+    query: str,
+    suggestions: list[str],
+) -> dict[str, Any]:
+    """NOT_FOUND plus optional ``did_you_mean`` name list for fuzzy player search."""
+    out = not_found_error(entity, query)
+    if suggestions:
+        out["did_you_mean"] = suggestions
+    return out
+
+
 def missing_param_error(param: str) -> dict[str, Any]:
     return ToolError(
         code="INVALID_PARAM",

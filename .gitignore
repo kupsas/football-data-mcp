@@ -15,6 +15,9 @@ __marimo__
 
 # Football MCP — data folder (generated locally or served from R2; never commit)
 data/
+# Static FM / reference catalogues (small JSON — safe to commit)
+!data/reference/
+!data/reference/**
 
 #Ignore environment files
 .env

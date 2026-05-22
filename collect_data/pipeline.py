@@ -9,7 +9,9 @@ from collect_data.build.unified import build_unified
 from collect_data.collectors.capology import collect_capology
 from collect_data.collectors.clubelo import collect_clubelo
 from collect_data.collectors.sofascore import collect_sofascore
+from collect_data.collectors.eafc import collect_eafc
 from collect_data.collectors.sofascore_matches import collect_sofascore_matches
+from collect_data.collectors.sofascore_positions import collect_sofascore_positions
 from collect_data.collectors.transfermarkt import collect_transfermarkt
 from collect_data.collectors.understat import (
     collect_understat,
@@ -56,6 +58,16 @@ def main() -> None:
     )
     p.add_argument("--transfermarkt-only",      action="store_true", help="Run Transfermarkt player profiles only (~6 hrs)")
     p.add_argument("--capology-only",           action="store_true", help="Run Capology wages only (~2 hrs)")
+    p.add_argument("--eafc-only",               action="store_true",
+                   help="EA FC attributes from Kaggle → slim parquets only")
+    p.add_argument("--sofascore-positions-only", action="store_true",
+                   help="SofaScore per-match average positions (default: EPL PoC)")
+    p.add_argument("--sofascore-heatmaps",      action="store_true",
+                   help="With --sofascore-positions-only: also scrape touch heatmaps (~22 calls/match)")
+    p.add_argument("--force-eafc",              action="store_true",
+                   help="Re-download and rebuild EA FC parquets even if they exist")
+    p.add_argument("--force-positions",         action="store_true",
+                   help="Re-scrape SofaScore average positions from scratch")
     p.add_argument("--rebuild-only",            action="store_true", help="Skip scraping; rebuild unified table from raw files")
     # Skip flags
     p.add_argument("--no-understat",            action="store_true")
@@ -65,6 +77,10 @@ def main() -> None:
     p.add_argument("--no-clubelo",              action="store_true", help="Skip ClubElo snapshot on full runs")
     p.add_argument("--no-transfermarkt",        action="store_true")
     p.add_argument("--no-capology",             action="store_true")
+    p.add_argument("--no-eafc",                 action="store_true",
+                   help="Skip EA FC attribute ingestion on full runs")
+    p.add_argument("--no-sofascore-positions",  action="store_true",
+                   help="Skip SofaScore average positions on full runs")
     args = p.parse_args()
 
     leagues = args.leagues or None
@@ -79,6 +95,8 @@ def main() -> None:
         ("clubelo",           args.clubelo_only),
         ("transfermarkt",     args.transfermarkt_only),
         ("capology",          args.capology_only),
+        ("eafc",              args.eafc_only),
+        ("sofascore_positions", args.sofascore_positions_only),
     ]
     active_only = next((name for name, flag in only_flags if flag), None)
 
@@ -156,9 +174,32 @@ def main() -> None:
             collect_capology(leagues=leagues, seasons=seasons, currency="eur")
             print()
 
+        if _run("eafc"):
+            print("── EA FC attributes (Kaggle → parquet) ─────────────────────────────")
+            collect_eafc(force=args.force_eafc)
+            print()
+
+        run_positions = (
+            active_only == "sofascore_positions"
+            or (active_only is None and not args.no_sofascore_positions)
+        )
+        if run_positions:
+            print("── SofaScore average positions (per match) ─────────────────────────")
+            pw_pos = max(1, int(args.parallel))
+            if pw_pos > 1:
+                print(f"Parallel workers : {pw_pos}")
+            collect_sofascore_positions(
+                leagues=leagues,
+                seasons=seasons,
+                force=args.force_positions,
+                include_heatmaps=args.sofascore_heatmaps,
+                parallel=pw_pos,
+            )
+            print()
+
     supplementary_only = active_only in (
         "understat_tables", "understat_matches", "transfermarkt", "capology",
-        "sofascore_matches", "clubelo",
+        "sofascore_matches", "clubelo", "eafc", "sofascore_positions",
     )
     if not supplementary_only:
         print("── Building unified Parquet ─────────────────────────────────────────")

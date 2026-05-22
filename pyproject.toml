@@ -86,6 +86,9 @@ lint = [
 r2 = [
     "boto3>=1.35.0",
 ]
+kaggle = [
+    "kaggle>=1.6.0",
+]
 
 [project.urls]
 repository = "https://github.com/kupsas/football-data-mcp"

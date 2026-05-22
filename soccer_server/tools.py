@@ -16,6 +16,7 @@ from soccer_server.data_loading import (
     _resolve_sofascore_match_id,
     _row_to_dict,
     _safe,
+    suggest_similar_players,
 )
 from soccer_server.errors import (
     generic_error,
@@ -24,7 +25,15 @@ from soccer_server.errors import (
     missing_source_error,
     no_data_error,
     not_found_error,
+    not_found_with_suggestions,
 )
+
+
+def _player_not_found(entity: str, name: str, df: pd.DataFrame | None = None) -> dict:
+    """NOT_FOUND for a player query, with ``did_you_mean`` from the unified table."""
+    frame = df if df is not None else get_unified()
+    suggestions = suggest_similar_players(frame, name, n=6) if not frame.empty else []
+    return not_found_with_suggestions(entity, name, suggestions)
 
 def tool_get_player(args: dict) -> dict:
     df = get_unified()
@@ -39,7 +48,7 @@ def tool_get_player(args: dict) -> dict:
 
     results = _filter(df, player=name, season=season, league=league, team=team)
     if results.empty:
-        return not_found_error("player", name)
+        return _player_not_found("player", name, df)
 
     results = results.sort_values("season", ascending=False)
 
@@ -219,7 +228,7 @@ def tool_compare_players(args: dict) -> dict:
     for name in names:
         results = _filter(df, player=name, season=season)
         if results.empty:
-            comparisons.append({"player": name, **not_found_error("player", name)})
+            comparisons.append({"player": name, **_player_not_found("player", name, df)})
             continue
         row = results.sort_values("season", ascending=False).iloc[0]
         d = {
@@ -250,7 +259,7 @@ def tool_find_similar_players(args: dict) -> dict:
 
     target_rows = _filter(df, player=name, season=season)
     if target_rows.empty:
-        return not_found_error("player", name)
+        return _player_not_found("player", name, df)
     target = target_rows.sort_values("season", ascending=False).iloc[0]
 
     preferred = [
@@ -650,7 +659,7 @@ def tool_get_player_history(args: dict) -> dict:
             params,
         )
     if player_rows.empty:
-        return not_found_error("match-level rows for player", name)
+        return _player_not_found("match-level rows for player", name)
 
     return {
         "player": name,
@@ -803,7 +812,7 @@ def tool_get_player_match_log(args: dict) -> dict:
         [*params, limit],
     )
     if rows.empty:
-        return not_found_error("match log for player", name)
+        return _player_not_found("match log for player", name)
 
     return {
         "player": name,
@@ -850,7 +859,7 @@ def tool_get_player_form(args: dict) -> dict:
         [*params, limit],
     )
     if rows.empty:
-        return not_found_error("form profile for player", name)
+        return _player_not_found("form profile for player", name)
 
     # Last N match ratings for trend
     last_matches = pd.DataFrame()
@@ -1055,7 +1064,7 @@ def tool_get_player_shot_map(args: dict) -> dict:
         [*params, limit],
     )
     if shots.empty:
-        return not_found_error("shots for player", name)
+        return _player_not_found("shots for player", name)
 
     profile = pd.DataFrame()
     if not db.table_empty("player_shot_profile"):
