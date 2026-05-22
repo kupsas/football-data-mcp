@@ -205,10 +205,10 @@ TOOLS = {
     },
     "get_player_history": {
         "description": (
-            "Historical records for a player from Understat or Transfermarkt. "
-            "type='form': per-match xG/goals/assists/minutes from Understat (Big 5 only). "
-            "type='value': market value timeline from Transfermarkt. "
-            "type='transfers': full transfer history from Transfermarkt."
+            "Per-match form history from Understat (Big 5 leagues). "
+            "type='form': xG, goals, assists, minutes, and match context per appearance. "
+            "Current Transfermarkt valuation and contract are on unified rows via get_player, "
+            "not time-series history."
         ),
         "inputSchema": {
             "type": "object",
@@ -216,7 +216,7 @@ TOOLS = {
                 "name": {"type": "string", "description": "Player name"},
                 "type": {
                     "type": "string",
-                    "description": "'form', 'value', or 'transfers' (default 'form')",
+                    "description": "'form' only (default 'form')",
                 },
                 "season": {"type": "string", "description": "Filter to a season (for form only)"},
                 "league": {"type": "string", "description": "Filter to a league (for form only)"},

@@ -61,10 +61,7 @@ def merge_financial_data(unified: pd.DataFrame) -> pd.DataFrame:
     # Pass 1: exact name match on name+league+season
     # Pass 2: rapidfuzz WRatio fuzzy match for what's still unmatched
     be = get_backend()
-    tm_files = [
-        n for n in sorted(be.list_raw_glob("transfermarkt__*.parquet"))
-        if "mv_history" not in n and "transfers" not in n
-    ]
+    tm_files = sorted(be.list_raw_glob("transfermarkt__*.parquet"))
     if tm_files:
         tm_frames = []
         for fname in tm_files:

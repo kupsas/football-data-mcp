@@ -212,8 +212,6 @@ _RAW_FAMILIES: list[tuple[str, str]] = [
     ("clubelo_global", "raw/clubelo__global__*.parquet"),
     ("clubelo_fixtures", "raw/clubelo__fixtures__*.parquet"),
     ("transfermarkt_profiles", "raw/transfermarkt__*.parquet"),
-    ("transfermarkt_mv_history", "raw/transfermarkt_mv_history__*.parquet"),
-    ("transfermarkt_transfers", "raw/transfermarkt_transfers__*.parquet"),
 ]
 
 

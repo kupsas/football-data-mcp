@@ -606,132 +606,57 @@ def tool_get_player_history(args: dict) -> dict:
     league = args.get("league")
     limit = int(args.get("limit", 50))
 
-    if history_type not in ("form", "value", "transfers"):
-        return invalid_param_value_error("type must be 'form', 'value', or 'transfers'")
-
-    if history_type == "form":
-        if db.table_empty("understat_rosters"):
-            return missing_source_error(
-                "Understat roster (match-level) data",
-                "python -m collect_data --understat-matches-only",
-            )
-
-        base_clauses = ["lower(CAST(player AS VARCHAR)) LIKE ?"]
-        params: list = [f"%{name.lower()}%"]
-        if season:
-            base_clauses.append("season = ?")
-            params.append(season)
-        if league:
-            base_clauses.append("lower(league) LIKE ?")
-            params.append(f"%{league.lower()}%")
-        where_base = " AND ".join(base_clauses)
-        if db.table_empty("understat_match_info"):
-            player_rows = db.query(
-                f"SELECT * FROM understat_rosters WHERE {where_base}",
-                params,
-            )
-        else:
-            alias_clauses = [
-                c.replace("player", "r.player")
-                .replace("season", "r.season")
-                .replace("league", "r.league")
-                for c in base_clauses
-            ]
-            where_alias = " AND ".join(alias_clauses)
-            player_rows = db.query(
-                f"""
-                SELECT r.*, i.home_team, i.away_team, i.datetime, i.home_goals, i.away_goals
-                FROM understat_rosters r
-                LEFT JOIN understat_match_info i ON r.match_id = i.match_id
-                WHERE {where_alias}
-                """,
-                params,
-            )
-        if player_rows.empty:
-            return not_found_error("match-level rows for player", name)
-
-        return {
-            "player": name,
-            "type": "form",
-            "records": len(player_rows),
-            "matches": [_row_to_dict(r) for _, r in player_rows.head(limit).iterrows()],
-        }
-
-    tm_id = None
-    df = get_unified()
-    if not df.empty and "tm_id" in df.columns:
-        candidates = _filter(df, player=name, season=season, league=league)
-        if not candidates.empty:
-            val = candidates.sort_values("season", ascending=False).iloc[0].get("tm_id")
-            if pd.notna(val) and str(val).strip():
-                tm_id = str(val).strip()
-
-    if history_type == "value":
-        if db.table_empty("transfermarkt_mv_history"):
-            mv_df = pd.DataFrame()
-        else:
-            mv_df = db.query("SELECT * FROM transfermarkt_mv_history")
-        if mv_df.empty:
-            return missing_source_error(
-                "Transfermarkt market value history",
-                "python -m collect_data --transfermarkt-only",
-            )
-
-        if tm_id:
-            rows = mv_df[mv_df["tm_id"].astype(str) == tm_id]
-        else:
-            if db.table_empty("transfermarkt_profiles"):
-                tm_flat = pd.DataFrame()
-            else:
-                tm_flat = db.query("SELECT * FROM transfermarkt_profiles")
-            if not tm_flat.empty:
-                match = tm_flat[
-                    tm_flat["tm_name"].astype(str).str.lower().str.contains(name.lower(), na=False)
-                ]
-                if not match.empty:
-                    tm_id = str(match.iloc[0]["tm_id"])
-                    rows = mv_df[mv_df["tm_id"].astype(str) == tm_id]
-                else:
-                    rows = pd.DataFrame()
-            else:
-                rows = pd.DataFrame()
-
-        if rows.empty:
-            return generic_error(
-                f"No market value history for {name!r}.",
-                hint="python -m collect_data --transfermarkt-only",
-            )
-
-        return {
-            "player": name,
-            "tm_id": tm_id,
-            "type": "value",
-            "history": [_row_to_dict(r) for _, r in rows.sort_values("date").head(limit).iterrows()],
-        }
-
-    if db.table_empty("transfermarkt_transfers"):
-        tr_df = pd.DataFrame()
-    else:
-        tr_df = db.query("SELECT * FROM transfermarkt_transfers")
-    if tr_df.empty:
-        return missing_source_error(
-            "Transfermarkt transfer history",
-            "python -m collect_data --transfermarkt-only",
+    if history_type != "form":
+        return invalid_param_value_error(
+            "type must be 'form' (Understat per-match history). "
+            "Current Transfermarkt value and contract: use get_player."
         )
 
-    if tm_id:
-        rows = tr_df[tr_df["tm_id"].astype(str) == tm_id]
-    else:
-        rows = tr_df[tr_df["tm_name"].astype(str).str.lower().str.contains(name.lower(), na=False)]
+    if db.table_empty("understat_rosters"):
+        return missing_source_error(
+            "Understat roster (match-level) data",
+            "python -m collect_data --understat-matches-only",
+        )
 
-    if rows.empty:
-        return not_found_error("transfer history for player", name)
+    base_clauses = ["lower(CAST(player AS VARCHAR)) LIKE ?"]
+    params: list = [f"%{name.lower()}%"]
+    if season:
+        base_clauses.append("season = ?")
+        params.append(season)
+    if league:
+        base_clauses.append("lower(league) LIKE ?")
+        params.append(f"%{league.lower()}%")
+    where_base = " AND ".join(base_clauses)
+    if db.table_empty("understat_match_info"):
+        player_rows = db.query(
+            f"SELECT * FROM understat_rosters WHERE {where_base}",
+            params,
+        )
+    else:
+        alias_clauses = [
+            c.replace("player", "r.player")
+            .replace("season", "r.season")
+            .replace("league", "r.league")
+            for c in base_clauses
+        ]
+        where_alias = " AND ".join(alias_clauses)
+        player_rows = db.query(
+            f"""
+            SELECT r.*, i.home_team, i.away_team, i.datetime, i.home_goals, i.away_goals
+            FROM understat_rosters r
+            LEFT JOIN understat_match_info i ON r.match_id = i.match_id
+            WHERE {where_alias}
+            """,
+            params,
+        )
+    if player_rows.empty:
+        return not_found_error("match-level rows for player", name)
 
     return {
         "player": name,
-        "tm_id": tm_id,
-        "type": "transfers",
-        "transfers": [_row_to_dict(r) for _, r in rows.drop_duplicates().head(limit).iterrows()],
+        "type": "form",
+        "records": len(player_rows),
+        "matches": [_row_to_dict(r) for _, r in player_rows.head(limit).iterrows()],
     }
 
 
@@ -768,15 +693,7 @@ def tool_data_status(args: dict) -> dict:
         "sofascore_match_momentum": len(be.list_raw_glob("sofascore_match_momentum__*.parquet")),
         "clubelo_global": len(be.list_raw_glob("clubelo__global__*.parquet")),
         "clubelo_fixtures": len(be.list_raw_glob("clubelo__fixtures__*.parquet")),
-        "transfermarkt_profiles": len(
-            [
-                n
-                for n in be.list_raw_glob("transfermarkt__*.parquet")
-                if "mv_history" not in n and "transfers" not in n
-            ]
-        ),
-        "transfermarkt_mv_history": len(be.list_raw_glob("transfermarkt_mv_history__*.parquet")),
-        "transfermarkt_transfers": len(be.list_raw_glob("transfermarkt_transfers__*.parquet")),
+        "transfermarkt_profiles": len(be.list_raw_glob("transfermarkt__*.parquet")),
     }
 
     fresh = freshness_summary(be)

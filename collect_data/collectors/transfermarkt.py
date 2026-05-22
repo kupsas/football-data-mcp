@@ -87,7 +87,7 @@ def collect_transfermarkt(leagues=None, seasons=None, sleep=2.0):
                 continue
 
             log.info(f"  {len(player_links)} players to scrape")
-            flat_rows, mv_rows, transfer_rows = [], [], []
+            flat_rows = []
 
             for j, link in enumerate(player_links):
                 try:
@@ -120,32 +120,6 @@ def collect_transfermarkt(leagues=None, seasons=None, sleep=2.0):
                         }
                     )
 
-                    mvh = row.get("Market value history")
-                    if isinstance(mvh, pd.DataFrame) and not mvh.empty:
-                        for _, mr in mvh.iterrows():
-                            mv_rows.append(
-                                {
-                                    "tm_id": tm_id,
-                                    "date": mr.get("date"),
-                                    "value_eur": mr.get("value"),
-                                    "league": league,
-                                    "season": season,
-                                }
-                            )
-
-                    th = row.get("Transfer history")
-                    if isinstance(th, pd.DataFrame) and not th.empty:
-                        for _, tr in th.iterrows():
-                            transfer_rows.append(
-                                {
-                                    "tm_id": tm_id,
-                                    "tm_name": row.get("Name"),
-                                    **{k: tr.get(k) for k in ["Season", "Date", "Left", "Joined", "MV", "Fee"]},
-                                    "league": league,
-                                    "season": season,
-                                }
-                            )
-
                     if (j + 1) % 100 == 0:
                         log.info(f"  [{j + 1}/{len(player_links)}] scraped")
 
@@ -157,7 +131,3 @@ def collect_transfermarkt(leagues=None, seasons=None, sleep=2.0):
             if flat_rows:
                 save_raw(pd.DataFrame(flat_rows), f"transfermarkt__{slug}")
                 log.info(f"  ✅ {len(flat_rows)} players")
-            if mv_rows:
-                save_raw(pd.DataFrame(mv_rows), f"transfermarkt_mv_history__{slug}")
-            if transfer_rows:
-                save_raw(pd.DataFrame(transfer_rows), f"transfermarkt_transfers__{slug}")

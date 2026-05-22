@@ -75,7 +75,7 @@ Once connected, Claude can answer questions using **16 built-in tools**.
 | `get_match` | Shot map and line-ups for a specific match (top five leagues) |
 | `get_sofascore_match` | Deep stats for one fixture — players, teams, shots |
 | `get_club_elo` | "How strong is Real Madrid right now?" |
-| `get_player_history` | Market value over time or transfer history for a player |
+| `get_player_history` | Per-match form (xG, goals, assists) from Understat; TM value/contract via `get_player` |
 | `data_status` | What data you have loaded and how complete it is |
 
 ### Match-by-match analytics
