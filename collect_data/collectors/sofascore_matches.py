@@ -14,63 +14,51 @@ import pandas as pd
 
 from collect_data.config import SEASONS, SOFASCORE_SEASONS, SOFASCORE_TARGET_LEAGUES
 from collect_data.helpers import _silence_bota_noise, _ss_retry
+from collect_data.log_config import pool_worker_logging_init, setup_collect_logging
 from collect_data.storage import RAW_DIR, repo_root, save_raw, sofa_match_checkpoint_flush
 
 log = logging.getLogger(__name__)
 
-# SofaScore team-match-stat keys we persist (match-level; not duplicated in season parquet).
-_SS_TEAM_STAT_KEYS = {
-    "ballPossession": ("ball_possession", "pct"),
-    "expectedGoals": ("expected_goals", "float"),
-    "shotsOnGoal": ("shots_on_target", "float"),
-    "shotsOffGoal": ("shots_off_target", "float"),
-    "totalShotsOnGoal": ("total_shots", "float"),
-    "totalShotsInsideBox": ("shots_inside_box", "float"),
-    "totalShotsOutsideBox": ("shots_outside_box", "float"),
-    "finalThirdEntries": ("final_third_entries", "float"),
-    "touchesInOppBox": ("touches_in_opp_box", "float"),
-    "offsides": ("offsides", "float"),
-    "cornerKicks": ("corner_kicks", "float"),
-    "bigChanceCreated": ("big_chances", "float"),
-}
+
+def _parquet_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce dict/list cells to JSON strings so parquet writes never fail."""
+    if df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype != object:
+            continue
+        sample = out[col].dropna().head(20)
+        if sample.empty:
+            continue
+        if not any(isinstance(v, (dict, list)) for v in sample):
+            continue
+        out[col] = out[col].apply(
+            lambda v: json.dumps(v, ensure_ascii=False)
+            if isinstance(v, (dict, list))
+            else v
+        )
+    return out
 
 
-def _sofascore_team_stats_to_rows(
+def _sofascore_team_stats_long(
     team_df: pd.DataFrame,
     match_id: int,
     home_team: str,
     away_team: str,
     league: str,
     season: str,
-) -> list[dict]:
-    """Pivot long SofaScore team match stats → one dict per period (ALL / 1ST / 2ND)."""
+) -> pd.DataFrame:
+    """Persist full long SofaScore team match stats (all API keys / periods)."""
     if team_df.empty or "period" not in team_df.columns or "key" not in team_df.columns:
-        return []
-    rows: list[dict] = []
-    for period in sorted(team_df["period"].unique()):
-        sub = team_df[team_df["period"] == period]
-        row: dict = {
-            "match_id": match_id,
-            "home_team": home_team,
-            "away_team": away_team,
-            "league": league,
-            "season": season,
-            "period": str(period),
-        }
-        for api_key, (prefix, _kind) in _SS_TEAM_STAT_KEYS.items():
-            hit = sub[sub["key"] == api_key]
-            if hit.empty:
-                row[f"{prefix}_home"] = None
-                row[f"{prefix}_away"] = None
-                continue
-            r0 = hit.iloc[0]
-            hv = r0.get("homeValue")
-            av = r0.get("awayValue")
-            # Prefer numeric homeValue/awayValue when present (SofaScore API).
-            row[f"{prefix}_home"] = float(hv) if pd.notna(hv) else None
-            row[f"{prefix}_away"] = float(av) if pd.notna(av) else None
-        rows.append(row)
-    return rows
+        return pd.DataFrame()
+    out = team_df.loc[:, ~team_df.columns.duplicated()].copy()
+    out["match_id"] = match_id
+    out["home_team"] = home_team
+    out["away_team"] = away_team
+    out["league"] = league
+    out["season"] = season
+    return _parquet_safe_frame(out)
 
 
 def _sofascore_shots_slim(shots: pd.DataFrame, match_id: int, league: str, season: str) -> pd.DataFrame:
@@ -144,83 +132,32 @@ def _sofascore_shots_slim(shots: pd.DataFrame, match_id: int, league: str, seaso
     return slim
 
 
-def _sofascore_player_match_slim(
+def _sofascore_player_match_full(
     pm: pd.DataFrame, match_id: int, home_id: int, league: str, season: str
 ) -> pd.DataFrame:
-    """Keep only columns not already covered by season-level SofaScore parquet."""
+    """Keep every API column; rename only id/name for stable joins."""
     if pm.empty:
         return pd.DataFrame()
     df = pm.loc[:, ~pm.columns.duplicated()].copy()
     df["match_id"] = match_id
     df["league"] = league
     df["season"] = season
-    df["is_home"] = df["teamId"].apply(lambda tid: bool(tid == home_id) if pd.notna(tid) else None)
-    rename = {
-        "id": "player_id",
-        "name": "player_name",
-        "teamId": "team_id",
-        "teamName": "team_name",
-        "substitute": "substitute",
-        "minutesPlayed": "minutes_played",
-        "rating": "rating",
-        "expectedGoals": "xg",
-        "expectedGoalsOnTarget": "xgot",
-        "expectedAssists": "xa",
-        "goals": "goals",
-        "goalAssist": "assists",
-        "totalShots": "total_shots",
-        "onTargetScoringAttempt": "shots_on_target",
-        "totalPass": "total_passes",
-        "accuratePass": "accurate_passes",
-        "touches": "touches",
-        "possessionLostCtrl": "possession_lost",
-        "duelWon": "duels_won",
-        "duelLost": "duels_lost",
-        "fouls": "fouls",
-        "wasFouled": "was_fouled",
-    }
-    for old, new in rename.items():
-        if old in df.columns and new not in df.columns:
-            df[new] = df[old]
-    cols = [
-        "match_id",
-        "player_id",
-        "player_name",
-        "team_id",
-        "team_name",
-        "is_home",
-        "substitute",
-        "minutes_played",
-        "rating",
-        "xg",
-        "xgot",
-        "xa",
-        "goals",
-        "assists",
-        "total_shots",
-        "shots_on_target",
-        "total_passes",
-        "accurate_passes",
-        "touches",
-        "possession_lost",
-        "duels_won",
-        "duels_lost",
-        "fouls",
-        "was_fouled",
-        "league",
-        "season",
-    ]
-    for c in cols:
-        if c not in df.columns:
-            df[c] = None
-    return df[cols]
+    if "teamId" in df.columns:
+        df["is_home"] = df["teamId"].apply(
+            lambda tid: bool(tid == home_id) if pd.notna(tid) else None
+        )
+    if "id" in df.columns and "player_id" not in df.columns:
+        df = df.rename(columns={"id": "player_id"})
+    if "name" in df.columns and "player_name" not in df.columns:
+        df = df.rename(columns={"name": "player_name"})
+    return _parquet_safe_frame(df)
 
 
 def _ckpt_flush(
     slug: str,
     done_ids: set,
     all_shots: list,
-    all_team_rows: list,
+    all_team_dfs: list[pd.DataFrame],
     all_play: list,
     all_mom: list,
     p_shots: Path,
@@ -241,7 +178,7 @@ def _ckpt_flush(
         slug,
         done_ids,
         all_shots,
-        all_team_rows,
+        all_team_dfs,
         all_play,
         all_mom,
         p_shots,
@@ -399,6 +336,7 @@ def _sofascore_match_season_worker(
     """
     league, season, sleep_between_matches, force = job
     pfx = f"[{league} | {season}]"
+    setup_collect_logging()
 
     sys.path.insert(0, str(repo_root() / "src"))
     from ScraperFC import Sofascore
@@ -483,8 +421,9 @@ def _sofascore_match_season_worker(
         return pd.DataFrame()
 
     all_shots: list[pd.DataFrame] = [df for df in [_load_partial(p_shots)] if not df.empty]
-    all_team_rows: list[dict] = (
-        _load_partial(p_team).to_dict("records") if p_team.exists() and done_ids else []
+    _team_partial = _load_partial(p_team)
+    all_team_dfs: list[pd.DataFrame] = (
+        [_team_partial] if not _team_partial.empty else []
     )
     all_play: list[pd.DataFrame] = [df for df in [_load_partial(p_play)] if not df.empty]
     all_mom: list[pd.DataFrame] = [df for df in [_load_partial(p_mom)] if not df.empty]
@@ -552,11 +491,11 @@ def _sofascore_match_season_worker(
                     tdf = _ss_retry(
                         ss.scrape_team_match_stats, mid, label=f"team_stats {mid}"
                     )
-                all_team_rows.extend(
-                    _sofascore_team_stats_to_rows(
-                        tdf, mid, home_team, away_team, league, season
-                    )
+                tlong = _sofascore_team_stats_long(
+                    tdf, mid, home_team, away_team, league, season
                 )
+                if not tlong.empty:
+                    all_team_dfs.append(tlong)
             except Exception as e:
                 log.warning(f"{pfx}    team stats match {mid}: {e}")
 
@@ -566,7 +505,7 @@ def _sofascore_match_season_worker(
                         ss.scrape_player_match_stats, mid, label=f"player_stats {mid}"
                     )
                 all_play.append(
-                    _sofascore_player_match_slim(pdf, mid, home_id, league, season)
+                    _sofascore_player_match_full(pdf, mid, home_id, league, season)
                 )
             except Exception as e:
                 log.warning(f"{pfx}    player stats match {mid}: {e}")
@@ -596,7 +535,7 @@ def _sofascore_match_season_worker(
                     slug,
                     done_ids,
                     all_shots,
-                    all_team_rows,
+                    all_team_dfs,
                     all_play,
                     all_mom,
                     p_shots,
@@ -609,7 +548,9 @@ def _sofascore_match_season_worker(
                 )
 
     shots_df = pd.concat(all_shots, ignore_index=True) if all_shots else pd.DataFrame()
-    team_df = pd.DataFrame(all_team_rows) if all_team_rows else pd.DataFrame()
+    team_df = (
+        pd.concat(all_team_dfs, ignore_index=True) if all_team_dfs else pd.DataFrame()
+    )
     play_df = pd.concat(all_play, ignore_index=True) if all_play else pd.DataFrame()
     mom_df = pd.concat(all_mom, ignore_index=True) if all_mom else pd.DataFrame()
 
@@ -656,7 +597,10 @@ def collect_sofascore_matches(
             _sofascore_match_season_worker(job)
         return
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=parallel) as pool:
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=parallel,
+        initializer=pool_worker_logging_init,
+    ) as pool:
         futures = {
             pool.submit(_sofascore_match_season_worker, job): job for job in jobs
         }

@@ -244,6 +244,23 @@ EAFC_SOURCES: list[dict] = [
         "season": "2025-2026",
         "parquet_name": "eafc__2025_2026",
         "schema": "aniss7_2025",
+        "coalesce_ac": True,
+    },
+]
+
+# FC25 SoFIFA: aniss7 (A) + sametozturkk (C); merged in eafc_ac_coalesce (no nyagami B).
+EAFC_FC25_AC_SOURCES: list[dict] = [
+    {
+        "id": "fc25_a",
+        "owner_slug": "aniss7",
+        "dataset_slug": "fifa-player-data-from-sofifa-2025-06-03",
+        "file_name": "player-data-full-2025-june.csv",
+    },
+    {
+        "id": "fc25_c",
+        "owner_slug": "sametozturkk",
+        "dataset_slug": "ea-sports-fc-25-real-player-data-sofifa-merge",
+        "file_name": "new-players-data-full.csv",
     },
 ]
 
@@ -291,6 +308,7 @@ EAFC_COL_RENAME_ANISS7_2025: dict[str, str] = {
     "gk_kicking": "gk_kicking",
     "gk_positioning": "gk_positioning",
     "gk_reflexes": "gk_reflexes",
+    "gk_speed": "gk_speed",
 }
 
 # Columns we keep from SoFIFA-style dumps (after rename). Used for DuckDB SELECT * then pandas trim.
@@ -304,6 +322,7 @@ EAFC_OUTPUT_COLUMNS: list[str] = [
     "dribbling", "ball_control", "heading_accuracy",
     "defending", "standing_tackle", "sliding_tackle", "interceptions", "marking",
     "reactions", "composure", "vision", "positioning", "aggression",
+    "gk_diving", "gk_handling", "gk_kicking", "gk_positioning", "gk_reflexes", "gk_speed",
     "preferred_foot", "weak_foot", "skill_moves",
     "work_rate_attacking", "work_rate_defending", "player_traits", "body_type",
     "season",

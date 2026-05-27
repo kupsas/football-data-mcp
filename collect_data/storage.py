@@ -236,7 +236,7 @@ def sofa_match_checkpoint_flush(
     slug: str,
     done_ids: set[int],
     all_shots: list,
-    all_team_rows: list,
+    all_team_dfs: list,
     all_play: list,
     all_mom: list,
     p_shots: Path,
@@ -255,8 +255,8 @@ def sofa_match_checkpoint_flush(
     try:
         if all_shots:
             pd.concat(all_shots, ignore_index=True).to_parquet(p_shots, index=False)
-        if all_team_rows:
-            pd.DataFrame(all_team_rows).to_parquet(p_team, index=False)
+        if all_team_dfs:
+            pd.concat(all_team_dfs, ignore_index=True).to_parquet(p_team, index=False)
         if all_play:
             pd.concat(all_play, ignore_index=True).to_parquet(p_play, index=False)
         if all_mom:

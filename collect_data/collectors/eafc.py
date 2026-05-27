@@ -270,7 +270,28 @@ def _normalize_eafc_frame(df: pd.DataFrame, *, season: str, schema: str) -> pd.D
     for col in numeric_like:
         out[col] = pd.to_numeric(out[col], errors="coerce")
 
+    # SoFIFA goalkeeping speed is optional; approximate from outfield pace for GKs.
+    if "gk_speed" in out.columns and "positions" in out.columns:
+        gk_mask = out["positions"].astype(str).str.contains("GK", na=False)
+        missing_speed = gk_mask & (out["gk_speed"].isna() | (out["gk_speed"] <= 0))
+        if missing_speed.any():
+            accel = pd.to_numeric(out.get("acceleration"), errors="coerce")
+            sprint = pd.to_numeric(out.get("sprint_speed"), errors="coerce")
+            fallback = ((accel.fillna(0) + sprint.fillna(0)) / 2).replace(0, float("nan"))
+            out.loc[missing_speed, "gk_speed"] = fallback.loc[missing_speed]
+
     return out
+
+
+def _process_source_ac_coalesce(source: dict) -> None:
+    """Build 2025-26 from SoFIFA A+C coalesce + work-rate carry-forward from 2024-25."""
+    from collect_data.collectors.eafc_ac_coalesce import build_fc25_ac_coalesce
+
+    parquet_name = source["parquet_name"]
+    log.info("  FC25 ingest: A+C coalesce (C>A stats, eafc_id from A)")
+    df = build_fc25_ac_coalesce()
+    save_raw(df, parquet_name)
+    log.info("  Saved %s (%s rows)", f"{parquet_name}.parquet", len(df))
 
 
 def _process_source(source: dict, *, force: bool = False) -> None:
@@ -279,6 +300,10 @@ def _process_source(source: dict, *, force: bool = False) -> None:
     out_path = RAW_DIR / f"{parquet_name}.parquet"
     if out_path.exists() and not force:
         log.info("  ⏭️  %s already exists", out_path.name)
+        return
+
+    if source.get("coalesce_ac"):
+        _process_source_ac_coalesce(source)
         return
 
     staging = _ensure_staging()

@@ -47,3 +47,13 @@ htmlcov/
 # Packaging build outputs (in addition to ScraperFC.egg-info above)
 dist/
 .eggs/
+
+# Local FC25 / EAFC analysis (not for public repo)
+reports/
+scripts/analyze_fc25_column_coverage.py
+test/test_eafc_ac_coalesce.py
+test/test_stage1_attribute_scorer.py
+scripts/
+docs/
+# Ignore local model checkpoints
+checkpoints/
