@@ -629,6 +629,43 @@ def _apply_eafc_source_row(
             unified.loc[row_idxs, dst] = fifa_row[col]
 
 
+def _match_eafc_row_for_unified(
+    eafc_df: pd.DataFrame,
+    name_norm: str,
+    season: str,
+    team: object,
+    *,
+    player_display: object = None,
+) -> pd.Series | None:
+    """Pick the best FIFA row when several players share the same ``_name_norm``.
+
+    Without this, a global dedupe on ``(_name_norm, season)`` keeps only the highest
+  ``overall_rating`` — e.g. Man City GK Ederson (88) beats Atalanta CM Éderson (77).
+    """
+    if not name_norm or not str(name_norm).strip():
+        return None
+    bucket = eafc_df[
+        (eafc_df["season"] == season) & (eafc_df["_name_norm"] == name_norm)
+    ]
+    if bucket.empty:
+        return None
+
+    club_norms = _team_clubs_norm_list(str(team) if team is not None else "")
+    if club_norms and "_club_norm" in bucket.columns:
+        club_hits = bucket[bucket["_club_norm"].isin(club_norms)]
+        if not club_hits.empty:
+            bucket = club_hits
+
+    display = str(player_display).strip() if player_display is not None else ""
+    if display and "player" in bucket.columns:
+        exact = bucket[bucket["player"] == display]
+        if not exact.empty:
+            bucket = exact
+
+    sort_col = "overall_rating" if "overall_rating" in bucket.columns else "eafc_id"
+    return bucket.sort_values(sort_col, ascending=False).iloc[0]
+
+
 def _fifa_row_by_player_name(
     eafc_df: pd.DataFrame,
     season: str,

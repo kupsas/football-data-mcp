@@ -202,6 +202,115 @@ UNDERSTAT_AUTHORITATIVE = frozenset({
     "xg", "xag", "npxg", "npg", "xg_chain", "xg_buildup",
 })
 
+# Synthetic league label for per-player season totals (all competitions combined).
+SEASON_TOTAL_LEAGUE = "All Competitions"
+
+# Values for unified ``xg_source`` / ``xag_source`` columns.
+XG_SOURCE_UNDERSTAT = "understat"
+XG_SOURCE_SOFASCORE = "sofascore"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Manual SofaScore name overrides (Understat base → SofaScore merge)
+#  Keys: (norm(understat_player_name), league)  →  norm(sofascore_player_name)
+# ══════════════════════════════════════════════════════════════════════════════
+
+MANUAL_SS_OVERRIDES: dict[tuple[str, str], str] = {
+    # ── England Premier League ───────────────────────────────────────────────
+    ("amad diallo traore", "England Premier League"): "amad diallo",
+    ("chimuanya ugochukwu", "England Premier League"): "lesley ugochukwu",
+    ("jonny", "England Premier League"): "jonny otto",
+    ("kepa", "England Premier League"): "kepa arrizabalaga",
+    ("louis beyer", "England Premier League"): "jordan beyer",
+    ("mathis cherki", "England Premier League"): "rayan cherki",
+    ("pablo", "England Premier League"): "pablo felipe",
+    ("savio", "England Premier League"): "savinho",
+    ("toti", "England Premier League"): "toti gomes",
+    # ── France Ligue 1 ──────────────────────────────────────────────────────
+    ("abner", "France Ligue 1"): "abner vinicius",
+    ("ali youssif", "France Ligue 1"): "ali youssef",
+    ("christ mbondi", "France Ligue 1"): "christ letono",
+    ("dehmaine assoumani", "France Ligue 1"): "dehmaine tabibou",
+    ("digbo maiga", "France Ligue 1"): "habib maiga",
+    ("elias legendre", "France Ligue 1"): "elias legendre quinonez zae",
+    ("everton pereira da silva", "France Ligue 1"): "everton pereira",
+    ("guemissongui ouattara", "France Ligue 1"): "abdoul ouattara",
+    ("john finn", "France Ligue 1"): "john patrick",
+    ("kelvin adou", "France Ligue 1"): "kelvin amian",
+    ("kiki kouyate", "France Ligue 1"): "boubakar kouyate",
+    ("koka", "France Ligue 1"): "ahmed hassan",
+    ("mamadou mbow", "France Ligue 1"): "moustapha mbow",
+    ("mathis cherki", "France Ligue 1"): "rayan cherki",
+    ("mbwana samatta", "France Ligue 1"): "ally samatta",
+    ("niakhate ndiaye", "France Ligue 1"): "abdoulaye ndiaye",
+    ("pierre ganiou", "France Ligue 1"): "ismaelo ganiou",
+    ("vignon ouotro", "France Ligue 1"): "patrick ouotro",
+    # ── Germany Bundesliga ──────────────────────────────────────────────────
+    ("bote baku", "Germany Bundesliga"): "ridle baku",
+    ("david santos", "Germany Bundesliga"): "david daiber",
+    ("gianluca waldschmidt", "Germany Bundesliga"): "luca waldschmidt",
+    ("iago", "Germany Bundesliga"): "iago borduchi",
+    ("jan thielmann", "Germany Bundesliga"): "jan uwe thielmann",
+    ("jean negoce", "Germany Bundesliga"): "jeanmatteo bahoya",
+    ("julian chabot", "Germany Bundesliga"): "jeff chabot",
+    ("kasim nuhu", "Germany Bundesliga"): "kasim adams",
+    ("kouadio kone", "Germany Bundesliga"): "manu kone",
+    ("ole pohlmann", "Germany Bundesliga"): "olinho",
+    ("santos borre", "Germany Bundesliga"): "rafael borre",
+    # ── Italy Serie A ───────────────────────────────────────────────────────
+    ("franck zambo", "Italy Serie A"): "frank anguissa",
+    ("jose reina", "Italy Serie A"): "pepe reina",
+    ("keita", "Italy Serie A"): "keita balde",
+    ("kouadio kone", "Italy Serie A"): "manu kone",
+    ("marco faraoni", "Italy Serie A"): "davide faraoni",
+    ("ndary adopo", "Italy Serie A"): "michel adopo",
+    ("niakhate ndiaye", "Italy Serie A"): "abdoulaye ndiaye",
+    ("pepin", "Italy Serie A"): "jose machin",
+    ("zito", "Italy Serie A"): "zito luvumbo",
+    # ── Spain La Liga ────────────────────────────────────────────────────────
+    ("aaron", "Spain La Liga"): "aaron escandell",
+    ("abner", "Spain La Liga"): "abner vinicius",
+    ("adam el mokhtari", "Spain La Liga"): "adam boayar",
+    ("alfon", "Spain La Liga"): "alfon gonzalez",
+    ("alfonso espino", "Spain La Liga"): "pacha",
+    ("alvaro pascual", "Spain La Liga"): "alvaro garciapascual",
+    ("garcia pascual", "Spain La Liga"): "alvaro garciapascual",
+    ("amath diedhiou", "Spain La Liga"): "amath ndiaye",
+    ("anthony lozano", "Spain La Liga"): "choco lozano",
+    ("cubo", "Spain La Liga"): "miguel llorente",
+    ("ezequiel avila", "Spain La Liga"): "chimy avila",
+    ("gavi", "Spain La Liga"): "pablo gavi",
+    ("jaume", "Spain La Liga"): "jaume domenech",
+    ("john finn", "Spain La Liga"): "john patrick",
+    ("jonny", "Spain La Liga"): "jonny otto",
+    ("jose reina", "Spain La Liga"): "pepe reina",
+    ("juan camilo hernandez", "Spain La Liga"): "cucho hernandez",
+    ("kepa", "Spain La Liga"): "kepa arrizabalaga",
+    ("kevin", "Spain La Liga"): "kevin vazquez",
+    ("lancinet kourouma", "Spain La Liga"): "lass kourouma",
+    ("marcos de sousa", "Spain La Liga"): "marcos andre",
+    ("miki bosch", "Spain La Liga"): "adria bosch",
+    ("munir", "Spain La Liga"): "munir el haddadi",
+    ("nacho", "Spain La Liga"): "nacho fernandez",
+    ("nianzou kouassi", "Spain La Liga"): "tanguy nianzou",
+    ("nyom", "Spain La Liga"): "allan nyom",
+    ("pau cabanes de la torre", "Spain La Liga"): "pau cabanes",
+    ("peque", "Spain La Liga"): "peque fernandez",
+    ("peter", "Spain La Liga"): "peter gonzalez",
+    ("raba", "Spain La Liga"): "dani raba",
+    ("rachad dhimi", "Spain La Liga"): "rachad fettal",
+    ("rahim alhassane", "Spain La Liga"): "haissem hassan",
+    ("raul", "Spain La Liga"): "raul asencio",
+    ("roger", "Spain La Liga"): "roger marti",
+    ("samu omorodion", "Spain La Liga"): "samu aghehowa",
+    ("savio", "Spain La Liga"): "savinho",
+    ("valde", "Spain La Liga"): "victor valdepenas",
+    ("yago alonso", "Spain La Liga"): "yago santiago",
+    ("youssef lekhedim", "Spain La Liga"): "youssef enriquez",
+    ("yuri", "Spain La Liga"): "yuri berchiche",
+    ("zito", "Spain La Liga"): "zito luvumbo",
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Manual TM name overrides

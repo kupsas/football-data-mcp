@@ -48,6 +48,13 @@ htmlcov/
 dist/
 .eggs/
 
+# Local metrics / analysis scripts and outputs (scripts and outputs live under data/l2_metrics/ — already ignored via data/)
+test/test_axis_exclusion_concepts.py
+test/test_axis_pole_labels.py
+test/test_verify_axis_labels.py
+test/test_season_analysis_rows.py
+test/fixtures/l2_axis_label_audit/
+
 # Local FC25 / EAFC analysis (not for public repo)
 reports/
 scripts/analyze_fc25_column_coverage.py

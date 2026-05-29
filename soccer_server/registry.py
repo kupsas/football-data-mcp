@@ -25,7 +25,9 @@ TOOLS = {
     "get_player": {
         "description": (
             "Find a player and return their season stats including xG, Sofascore rating, "
-            "market value, and contract expiration. Use season/league/team to narrow results. "
+            "market value, and contract expiration. Rows include xg_source/xag_source "
+            "(understat for Big 5 leagues, sofascore elsewhere). Do not compare raw xG "
+            "across sources. Use season/league/team to narrow results. "
             "Set full_stats=false for a compact summary when searching across many rows."
         ),
         "inputSchema": {
@@ -47,8 +49,9 @@ TOOLS = {
     "scout_position": {
         "description": (
             "Find top players for a position, optionally sorted by any stat (sort_by), "
-            "with budget and age filters. When sort_by is set this effectively acts as "
-            "a league-leaders query (e.g. position='FW', sort_by='xg' gives top xG scorers)."
+            "with budget and age filters. xG/xAG come from Understat in the top five "
+            "European leagues and from SofaScore in other leagues (see xg_source). "
+            "When sort_by is set this effectively acts as a league-leaders query."
         ),
         "inputSchema": {
             "type": "object",

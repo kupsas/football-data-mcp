@@ -17,8 +17,8 @@ Combines player and match statistics into one dataset you can explore in convers
 | Kind of data | Where it’s available |
 |--------------|-------------------|
 | Goals, assists, minutes, shots, cards | All 10 leagues |
-| Expected goals (xG), non-penalty xG, expected assists | All 10 leagues — richest in the top five European leagues |
-| Build-up xG (how much a player contributes before a shot) | Top five leagues only (England, Spain, Germany, Italy, France) |
+| Expected goals (xG), expected assists (xAG) | All 10 leagues — **Understat** model in top five; **SofaScore** model elsewhere (`xg_source` / `xag_source` columns) |
+| Non-penalty xG, build-up xG, xG chain | Top five leagues only (Understat; not comparable to SofaScore xG) |
 | Advanced passing & chance creation | Top five + Netherlands + Portugal — not Championship or European cups |
 | Player ratings, duels, dribbles, big chances, and 80+ other performance metrics | All 10 leagues |
 | Market value, contract end date, height, nationality | Domestic leagues — weakest for Champions League and Europa League |
@@ -115,6 +115,8 @@ That installs two commands you can run from any folder:
 First-time full download takes a while (some sites open a headless browser in the background).
 
 Stats are collected from **Understat**, **SofaScore**, **ClubElo**, **Transfermarkt**, and **Capology** (see `CHANGELOG.md` for recent pipeline changes).
+
+The unified player file also uses the **[REEP](https://github.com/robbyhecht/reep)** (Robust Entity Exchange Protocol) crosswalk (`data/reference/reep_people.csv`) to link player IDs across sources when names differ — for example matching Understat season rows to SofaScore dribble/passing stats, and SofaScore IDs to EA FC / SoFIFA attributes.
 
 ```bash
 collect-data

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import html
 import logging
 import os
 import sys
@@ -35,10 +36,27 @@ def _silence_bota_noise():
             sys.stdout = old_stdout
 
 
+def sanitize_player_name(name: str) -> str:
+    """
+    Canonical display name for the unified ``player`` column.
+
+    Understat/SofaScore sometimes emit HTML entities (``O&#039;Shea``). We
+  unescape once (twice if still encoded) and collapse whitespace so the same
+    person is not split into two display strings in one season.
+    """
+    if not isinstance(name, str):
+        return ""
+    text = html.unescape(name.strip())
+    if "&#" in text or "&apos;" in text or "&quot;" in text:
+        text = html.unescape(text)
+    return " ".join(text.split())
+
+
 def _norm_name(name: str) -> str:
     """Normalise player name for cross-source matching (accents → ascii, lowercase)."""
     if not isinstance(name, str):
         return ""
+    name = sanitize_player_name(name)
     nfkd = unicodedata.normalize("NFKD", name)
     ascii_name = nfkd.encode("ascii", "ignore").decode("ascii")
     clean = re.sub(r"[^a-z0-9 ]", "", ascii_name.lower())

@@ -66,6 +66,8 @@ def tool_get_player(args: dict) -> dict:
             "assists",
             "xg",
             "xag",
+            "xg_source",
+            "xag_source",
             "npxg",
             "minutes",
             "games",
